@@ -1,0 +1,50 @@
+# Carpetas de Flutter y Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+
+# Archivos específicos de la Web (si usas Flutter Web)
+lib/generated_plugin_registrant.dart
+
+# Archivos de Flutter que se autogeneran
+ephemeral/
+linux/flutter/ephemeral/
+macos/flutter/ephemeral/
+windows/flutter/ephemeral/
+
+# Logs y copias de seguridad
+*.log
+*.xo
+
+# IDEs (VS Code y Android Studio)
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.history/
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Configuración local de Android (¡Super importante para que no subas rutas de tu PC!)
+android/local.properties
+android/.gradle/
+android/app/Release/
+android/app/Debug/
+
+# Configuración de CocoaPods (iOS/macOS)
+ios/.symlinks/
+ios/Pods/
+ios/Podfile.lock
+macos/.symlinks/
+macos/Pods/
+macos/Podfile.lock
+
+# Secretos y variables de entorno (por si usas paquetes como flutter_dotenv)
+.env*
