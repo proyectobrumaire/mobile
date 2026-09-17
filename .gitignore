@@ -1,4 +1,6 @@
-# Carpetas de Flutter y Dart
+# ---------------------------------------------------------------------
+# FLUTTER, DART Y PUB (Fusión Definitiva)
+# ---------------------------------------------------------------------
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
@@ -6,45 +8,68 @@
 .pub-cache/
 .pub/
 build/
-
-# Archivos específicos de la Web (si usas Flutter Web)
+coverage/
+**/doc/api/
 lib/generated_plugin_registrant.dart
 
-# Archivos de Flutter que se autogeneran
+# Archivos de Flutter que se autogeneran por plataforma
 ephemeral/
 linux/flutter/ephemeral/
 macos/flutter/ephemeral/
 windows/flutter/ephemeral/
+**/ios/Flutter/.last_build_id
 
-# Logs y copias de seguridad
-*.log
-*.xo
+# Mapas de ofuscación y símbolos de compilación (Del viejo)
+app.*.symbols
+app.*.map.json
 
-# IDEs (VS Code y Android Studio)
+# ---------------------------------------------------------------------
+# ENTORNOS DE DESARROLLO (IDEs) Y SISTEMA
+# ---------------------------------------------------------------------
 .idea/
 *.iml
 *.ipr
 *.iws
 .vscode/
 .history/
-
-# Archivos del sistema operativo
+.history
+.atom/
+*.swp
 .DS_Store
 Thumbs.db
 
-# Configuración local de Android (¡Super importante para que no subas rutas de tu PC!)
+# ---------------------------------------------------------------------
+# PLATAFORMA: ANDROID
+# ---------------------------------------------------------------------
 android/local.properties
 android/.gradle/
-android/app/Release/
 android/app/Debug/
+android/app/Profile/
+android/app/Release/
+/android/app/debug
+/android/app/profile
+/android/app/release
 
-# Configuración de CocoaPods (iOS/macOS)
+# ---------------------------------------------------------------------
+# PLATAFORMA: IOS / MACOS (CocoaPods)
+# ---------------------------------------------------------------------
 ios/.symlinks/
 ios/Pods/
 ios/Podfile.lock
 macos/.symlinks/
 macos/Pods/
 macos/Podfile.lock
+.swiftpm/
 
-# Secretos y variables de entorno (por si usas paquetes como flutter_dotenv)
+# ---------------------------------------------------------------------
+# ARCHIVOS TEMPORALES, LOGS Y SECRETOS
+# ---------------------------------------------------------------------
+*.class
+*.log
+*.pyc
+.build/
+.buildlog/
+.svn/
+migrate_working_dir/
+*.xo
 .env*

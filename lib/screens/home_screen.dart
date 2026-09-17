@@ -8,6 +8,7 @@ import '../services/local_storage_service.dart';
 import '../models/sync_progress.dart';
 import 'setup_screen.dart';
 import 'gallery_screen.dart';
+import 'cloud_gallery_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -62,9 +63,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() { _esp32Reachable = ok; _checking = false; });
   }
 
-  Future<String> _getBackendUrl() async {
+  Future<String> _getPresignerUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('backend_url') ?? '';
+    return prefs.getString('presigner_url') ?? '';
+  }
+
+  Future<String> _getPresignerSecret() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('presigner_secret') ?? '';
   }
 
   void _runStream(Stream<SyncProgress> stream) {
@@ -104,13 +110,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _startBackendSync() async {
-    final url = await _getBackendUrl();
-    if (url.isEmpty) {
+    final url = await _getPresignerUrl();
+    final secret = await _getPresignerSecret();
+    if (url.isEmpty || secret.isEmpty) {
       await _showBackendDialog();
       return;
     }
     _runStream(
-      BackendSyncService(BackendService(url), _storage).sync(),
+      BackendSyncService(BackendService(url, secret), _storage).sync(),
     );
   }
 
@@ -150,33 +157,58 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showBackendDialog() async {
     final prefs = await SharedPreferences.getInstance();
-    final ctrl = TextEditingController(text: prefs.getString('backend_url') ?? '');
+    final urlCtrl    = TextEditingController(text: prefs.getString('presigner_url') ?? '');
+    final secretCtrl = TextEditingController(text: prefs.getString('presigner_secret') ?? '');
+    bool obscure = true;
     if (!mounted) return;
-    final result = await showDialog<String>(
+    await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('URL del servidor'),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(
-            hintText: 'http://192.168.x.x:8000',
-            border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Configuración S3'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: urlCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'URL del presigner',
+                  hintText: 'https://xxxx.lambda-url.us-east-1.on.aws/',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.url,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: secretCtrl,
+                obscureText: obscure,
+                decoration: InputDecoration(
+                  labelText: 'Secret',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(obscure ? Icons.visibility : Icons.visibility_off),
+                    onPressed: () => setState(() => obscure = !obscure),
+                  ),
+                ),
+              ),
+            ],
           ),
-          keyboardType: TextInputType.url,
-          autofocus: true,
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+            FilledButton(
+              onPressed: () async {
+                final url    = urlCtrl.text.trim();
+                final secret = secretCtrl.text.trim();
+                if (url.isNotEmpty)    await prefs.setString('presigner_url', url);
+                if (secret.isNotEmpty) await prefs.setString('presigner_secret', secret);
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('Guardar'),
-          ),
-        ],
       ),
     );
-    if (result != null && result.isNotEmpty) {
-      await prefs.setString('backend_url', result);
-    }
   }
 
   Future<void> _openSetup() async {
@@ -195,10 +227,18 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.photo_library_outlined),
-            tooltip: 'Galería',
+            tooltip: 'Galería local',
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const GalleryScreen()),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.cloud_outlined),
+            tooltip: 'Galería Cloud',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const CloudGalleryScreen()),
             ),
           ),
           IconButton(
@@ -208,7 +248,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.dns_outlined),
-            tooltip: 'Servidor backend',
+            tooltip: 'Presigner S3',
             onPressed: _showBackendDialog,
           ),
           IconButton(
