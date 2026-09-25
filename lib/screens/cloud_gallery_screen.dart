@@ -322,7 +322,11 @@ class _EnvRow extends StatelessWidget {
   final Map<String, double> env;
   const _EnvRow({required this.env});
 
-  static const _order = ['T1_K', 'H1_K', 'P1_K', 'P2_K', 'W1_K', 'H2_K'];
+  // Orden en que el Arduino envía los sensores; claves desconocidas van al final
+  static const _order = [
+    'T1_K', 'T2_K', 'T3_K', 'T4_K', 'T5_K',
+    'H1_K', 'H2_K', 'P1_K', 'P2_K', 'I4_K', 'W1_K',
+  ];
 
   @override
   Widget build(BuildContext context) {
