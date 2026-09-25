@@ -43,8 +43,7 @@ class Esp32SyncService {
     }
 
     final photos = files.where((f) => f.name.endsWith('.jpg')).toList();
-    final hasLog = files.any((f) => f.name.endsWith('log.txt'));
-    yield SyncProgress('${photos.length} fotos y ${hasLog ? 1 : 0} log encontrados.');
+    yield SyncProgress('${photos.length} fotos encontradas.');
 
     int newPhotos = 0;
     for (final photo in photos) {
@@ -61,14 +60,15 @@ class Esp32SyncService {
       }
     }
 
+    // El log se pide directo y no se busca en /list: /list devuelve máx. 20
+    // archivos y log.txt puede quedar fuera si hay muchas fotos en la SD.
     int newLines = 0;
-    if (!hasLog) {
-      yield const SyncProgress('Sin log.txt en la SD.');
-    } else {
-      try {
-        yield const SyncProgress('Descargando log.txt...');
-        final logFile = files.firstWhere((f) => f.name.endsWith('log.txt'));
-        final bytes = await esp32.downloadFile(logFile.name);
+    try {
+      yield const SyncProgress('Descargando log.txt...');
+      final bytes = await esp32.tryDownloadFile('log.txt');
+      if (bytes == null) {
+        yield const SyncProgress('Sin log.txt en la SD.');
+      } else {
         final content = String.fromCharCodes(bytes);
         final all = LogParser.parse(content);
 
@@ -92,9 +92,9 @@ class Esp32SyncService {
         } catch (e) {
           yield SyncProgress('⚠ No se pudo resetear el log: $e', isWarning: true);
         }
-      } catch (e) {
-        yield SyncProgress('Error con log.txt: $e', isError: true);
       }
+    } catch (e) {
+      yield SyncProgress('Error con log.txt: $e', isError: true);
     }
 
     await prefs.setString(_keyAt, DateTime.now().toIso8601String());

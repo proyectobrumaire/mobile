@@ -57,6 +57,18 @@ class Esp32Service {
     return res.bodyBytes;
   }
 
+  // Igual que downloadFile, pero devuelve null si el archivo no existe (404)
+  Future<Uint8List?> tryDownloadFile(String filename) async {
+    final res = await http
+        .get(_staUri('/download', {'file': filename}))
+        .timeout(_downloadTimeout);
+    if (res.statusCode == 404) return null;
+    if (res.statusCode != 200) {
+      throw Exception('GET /download falló: ${res.statusCode}');
+    }
+    return res.bodyBytes;
+  }
+
   Future<void> deleteFile(String filename) async {
     final res = await http
         .get(_staUri('/delete', {'file': filename}))
