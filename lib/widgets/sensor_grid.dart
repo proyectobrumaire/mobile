@@ -33,7 +33,6 @@ class SensorGrid extends StatelessWidget {
                   Text(
                     sensorLabels[k] ?? k,
                     style: theme.labelSmall?.copyWith(color: labelColor ?? Colors.grey.shade600),
-                    overflow: TextOverflow.ellipsis,
                   ),
                   Text(
                     formatSensorValue(k, sensors[k]),

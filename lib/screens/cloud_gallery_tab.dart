@@ -306,7 +306,6 @@ class _SectionBlock extends StatelessWidget {
                   child: Text(
                     section.title,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 const SizedBox(width: 8),

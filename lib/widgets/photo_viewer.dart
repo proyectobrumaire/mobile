@@ -214,26 +214,29 @@ class _InfoPanel extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(photo.title,
-                        style: text.titleSmall?.copyWith(color: Colors.white)),
-                  ),
-                  if (status != null)
-                    Chip(
-                      avatar: Icon(status.icon, size: 16, color: status.color),
-                      label: Text(status.text),
-                      labelStyle: TextStyle(color: status.color, fontSize: 12),
-                      backgroundColor: status.color.withValues(alpha: 0.12),
-                      side: BorderSide.none,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                ],
-              ),
+              // Título y subtítulo a todo el ancho (pueden ocupar varias
+              // líneas); la etiqueta de estado va debajo para no comprimirlos.
+              Text(photo.title, style: text.titleSmall?.copyWith(color: Colors.white)),
               if (photo.subtitle != null)
-                Text(photo.subtitle!,
-                    style: text.bodySmall?.copyWith(color: Colors.white70)),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(photo.subtitle!,
+                      style: text.bodyMedium?.copyWith(color: Colors.white70)),
+                ),
+              if (status != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Row(
+                    children: [
+                      Icon(status.icon, size: 16, color: status.color),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(status.text,
+                            style: text.bodySmall?.copyWith(color: status.color)),
+                      ),
+                    ],
+                  ),
+                ),
               for (final (label, value) in photo.details)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),

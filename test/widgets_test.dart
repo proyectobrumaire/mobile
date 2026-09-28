@@ -109,4 +109,28 @@ void main() {
     expect(find.text('Temp. ambiente'), findsOneWidget);
     expect(find.text('Código: PERIODIC'), findsOneWidget);
   });
+
+  testWidgets('Visor: subtítulo completo en pantalla angosta con fuente grande', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.625; // ~411 dp, como un Samsung A55
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MediaQuery(
+      data: const MediaQueryData(size: Size(411, 891), textScaler: TextScaler.linear(1.3)),
+      child: MaterialApp(
+        home: PhotoViewerScreen(photos: [
+          ViewerPhoto(
+            image: null,
+            title: 'Miércoles 24 de septiembre · 21:36:19',
+            subtitle: 'Sin evento registrado · foto 1 de 3',
+            status: (text: 'Pendiente de subir', color: Colors.orange, icon: Icons.cloud_upload),
+          ),
+        ]),
+      ),
+    ));
+    final finder = find.text('Sin evento registrado · foto 1 de 3');
+    expect(finder, findsOneWidget);
+    // Ocupa todo el ancho del panel (no queda comprimido por la etiqueta de estado).
+    expect(tester.getSize(finder).width, greaterThan(200));
+    expect(tester.takeException(), isNull);
+  });
 }

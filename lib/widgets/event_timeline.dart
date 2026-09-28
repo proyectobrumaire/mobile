@@ -168,8 +168,10 @@ class _EventRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SizedBox(
-              width: 72,
+            // Ancho mínimo para alinear las horas, pero crece si la fuente del
+            // sistema es grande (no corta la hora).
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 72),
               child: Padding(
                 padding: const EdgeInsets.only(top: 12, left: 16),
                 child: Text(
@@ -205,7 +207,6 @@ class _EventRow extends StatelessWidget {
                     Text(
                       summary.isEmpty ? 'Sin lecturas' : summary,
                       style: text.bodySmall?.copyWith(color: Colors.grey.shade600),
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),

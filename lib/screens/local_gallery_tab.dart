@@ -443,17 +443,18 @@ class _EventBlock extends StatelessWidget {
                 style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(width: 8),
-              Flexible(
+              // Expanded (sin Spacer al lado) para que la etiqueta use todo el
+              // ancho libre; si no cabe, pasa a una segunda línea.
+              Expanded(
                 child: Text(
                   eventLabel(group.eventType) +
                       (group.hasSensorData ? '' : ' · sin lecturas'),
                   style: text.bodySmall?.copyWith(
                     color: group.eventType == 'BIRD' ? Colors.green.shade700 : Colors.grey.shade600,
                   ),
-                  overflow: TextOverflow.ellipsis,
+                  softWrap: true,
                 ),
               ),
-              const Spacer(),
               if (selecting)
                 Checkbox(
                   tristate: true,
