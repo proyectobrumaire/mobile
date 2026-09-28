@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/esp32_service.dart';
+import '../services/presigner_config.dart';
 import '../services/esp32_sync_service.dart';
 import '../services/local_storage_service.dart';
 import '../services/sync_run_controller.dart';
@@ -22,7 +23,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final _sync = SyncRunController.instance;
   int _seenRuns = 0;
 
-  bool _esp32Reachable = false;
+  Esp32Status _esp32Status = Esp32Status.noEncontrado;
+  String? _statusDetail;
   bool _checking = false;
   String _esp32Host = Esp32Service.defaultStaHost;
 
@@ -69,8 +71,59 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _checkConnection() async {
     setState(() => _checking = true);
-    final ok = await _makeEsp32Service().isReachable();
-    if (mounted) setState(() { _esp32Reachable = ok; _checking = false; });
+    final esp = _makeEsp32Service();
+    var health = await esp.checkStatus();
+    // "SD Busy" es transitorio: reintentar un par de veces antes de mostrarlo.
+    for (var i = 0; i < 2 && health.status == Esp32Status.sdOcupada; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      health = await esp.checkStatus();
+    }
+    if (mounted) {
+      setState(() {
+        _esp32Status = health.status;
+        _statusDetail = health.technical;
+        _checking = false;
+      });
+    }
+  }
+
+  Future<void> _reboot() async {
+    if (_sync.running) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Espera a que termine la sincronización en curso para reiniciar el ESP32.'),
+      ));
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.restart_alt),
+        title: const Text('¿Reiniciar el ESP32?'),
+        content: const Text(
+          'La placa se reinicia y vuelve en unos segundos. Sirve, por ejemplo, '
+          'cuando la tarjeta SD deja de responder. Mientras reinicia no se '
+          'guardan fotos ni eventos.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Reiniciar')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final result = await showDialog<RebootResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _RebootDialog(esp32: _makeEsp32Service()),
+    );
+    if (!mounted) return;
+    if (result != null) {
+      setState(() {
+        _esp32Status = result.status;
+        _statusDetail = result.technical;
+      });
+    }
+    _checkConnection();
   }
 
   /// Pregunta el modo (un lote o continua) y arranca la descarga.
@@ -168,51 +221,93 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showBackendDialog() async {
-    final prefs = await SharedPreferences.getInstance();
-    final urlCtrl    = TextEditingController(text: prefs.getString('presigner_url') ?? '');
-    final secretCtrl = TextEditingController(text: prefs.getString('presigner_secret') ?? '');
+    final cfg = await PresignerConfig.load();
+    // Solo se prellena lo guardado: los valores compilados no se muestran
+    // (la URL aparece como pista; el secret nunca).
+    final urlCtrl    = TextEditingController(text: cfg.savedUrl);
+    final secretCtrl = TextEditingController(text: cfg.savedSecret);
     bool obscure = true;
     if (!mounted) return;
+    final canReset = cfg.hasBuildDefaults &&
+        (cfg.savedUrl.isNotEmpty || cfg.savedSecret.isNotEmpty);
     await showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
           title: const Text('Configuración S3'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: urlCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'URL del presigner',
-                  hintText: 'https://xxxx.lambda-url.us-east-1.on.aws/',
-                  border: OutlineInputBorder(),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (cfg.hasBuildDefaults)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Theme.of(ctx).colorScheme.secondaryContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      cfg.usingBuildDefaults && cfg.savedUrl.isEmpty && cfg.savedSecret.isEmpty
+                          ? 'Usando la configuración incluida en la app. Escribe valores '
+                              'solo si quieres reemplazarla.'
+                          : cfg.usingBuildDefaults
+                              ? 'Usando en parte la configuración incluida en la app '
+                                  '(los campos vacíos).'
+                              : 'Usando la configuración guardada en este teléfono. '
+                                  '«Restablecer» vuelve a la incluida en la app.',
+                      style: Theme.of(ctx).textTheme.bodySmall,
+                    ),
+                  ),
+                TextField(
+                  controller: urlCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'URL del presigner',
+                    hintText: cfg.urlFromBuild
+                        ? PresignerConfig.buildUrl
+                        : 'https://xxxx.lambda-url.us-east-1.on.aws/',
+                    helperText: cfg.urlFromBuild ? 'Vacío = incluida en la app' : null,
+                    border: const OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.url,
                 ),
-                keyboardType: TextInputType.url,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: secretCtrl,
-                obscureText: obscure,
-                decoration: InputDecoration(
-                  labelText: 'Secret',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: Icon(obscure ? Icons.visibility : Icons.visibility_off),
-                    onPressed: () => setState(() => obscure = !obscure),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: secretCtrl,
+                  obscureText: obscure,
+                  decoration: InputDecoration(
+                    labelText: 'Secret',
+                    hintText: cfg.secretFromBuild ? '•••••••• (incluido en la app)' : null,
+                    helperText: cfg.secretFromBuild ? 'Vacío = incluido en la app' : null,
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(obscure ? Icons.visibility : Icons.visibility_off),
+                      onPressed: () => setState(() => obscure = !obscure),
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
           actions: [
+            if (canReset)
+              TextButton(
+                onPressed: () async {
+                  await PresignerConfig.reset();
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Se restableció la configuración incluida en la app.'),
+                    ));
+                  }
+                },
+                child: const Text('Restablecer'),
+              ),
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
             FilledButton(
               onPressed: () async {
-                final url    = urlCtrl.text.trim();
-                final secret = secretCtrl.text.trim();
-                if (url.isNotEmpty)    await prefs.setString('presigner_url', url);
-                if (secret.isNotEmpty) await prefs.setString('presigner_secret', secret);
+                await PresignerConfig.save(url: urlCtrl.text, secret: secretCtrl.text);
                 if (ctx.mounted) Navigator.pop(ctx);
               },
               child: const Text('Guardar'),
@@ -263,6 +358,11 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: _showBackendDialog,
           ),
           IconButton(
+            icon: const Icon(Icons.restart_alt),
+            tooltip: 'Reiniciar ESP32',
+            onPressed: _reboot,
+          ),
+          IconButton(
             icon: const Icon(Icons.wifi_tethering),
             tooltip: 'Configurar ESP32',
             onPressed: _openSetup,
@@ -272,7 +372,9 @@ class _HomeScreenState extends State<HomeScreen> {
       body: Column(
         children: [
           _ConnectionBanner(
-            reachable: _esp32Reachable,
+            status: _esp32Status,
+            detail: _statusDetail,
+            onReboot: _reboot,
             checking: _checking,
             host: _esp32Host,
             onCheck: _checkConnection,
@@ -439,26 +541,41 @@ class _StatBox extends StatelessWidget {
 }
 
 class _ConnectionBanner extends StatelessWidget {
-  final bool reachable;
+  final Esp32Status status;
+  final String? detail;
   final bool checking;
   final String host;
   final VoidCallback onCheck;
+  final VoidCallback onReboot;
 
   const _ConnectionBanner({
-    required this.reachable,
+    required this.status,
     required this.checking,
     required this.host,
     required this.onCheck,
+    required this.onReboot,
+    this.detail,
   });
 
   @override
   Widget build(BuildContext context) {
-    final color = reachable ? Colors.green : Colors.orange;
-    final bg = reachable ? Colors.green.shade50 : Colors.orange.shade50;
+    final (MaterialColor color, IconData icon, String text) = switch (status) {
+      Esp32Status.conectado => (Colors.green, Icons.check_circle, 'ESP32 conectado ($host)'),
+      // Transitorio: no alarmar.
+      Esp32Status.sdOcupada =>
+        (Colors.green, Icons.check_circle, 'ESP32 conectado ($host) · SD ocupada, reintenta en un momento'),
+      Esp32Status.sdNoResponde =>
+        (Colors.red, Icons.sd_card_alert, 'ESP32 conectado, pero la tarjeta SD no responde'),
+      Esp32Status.modoAp =>
+        (Colors.orange, Icons.wifi_tethering, 'ESP32 en modo configuración (sin WiFi)'),
+      Esp32Status.noEncontrado =>
+        (Colors.orange, Icons.warning_amber, 'ESP32 no encontrado ($host)'),
+    };
+    final sdDown = status == Esp32Status.sdNoResponde;
     return Container(
       width: double.infinity,
-      color: bg,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: color.shade50,
+      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
       child: Row(
         children: [
           if (checking)
@@ -467,24 +584,110 @@ class _ConnectionBanner extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2, color: color),
             )
           else
-            Icon(
-              reachable ? Icons.check_circle : Icons.warning_amber,
-              size: 16,
-              color: color,
-            ),
+            Icon(icon, size: 18, color: color.shade700),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              reachable
-                  ? 'ESP32 conectado ($host)'
-                  : 'ESP32 no encontrado ($host)',
-              style: TextStyle(color: color.shade800, fontSize: 13),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  text,
+                  style: TextStyle(
+                    color: color.shade800,
+                    fontSize: 13,
+                    fontWeight: sdDown ? FontWeight.w600 : null,
+                  ),
+                ),
+                if (sdDown)
+                  Text(
+                    'Las fotos y eventos no se están guardando. Reinicia la placa.',
+                    style: TextStyle(color: color.shade800, fontSize: 12),
+                  ),
+              ],
             ),
           ),
-          TextButton(
-            onPressed: checking ? null : onCheck,
-            child: const Text('Verificar'),
-          ),
+          if (sdDown)
+            TextButton(onPressed: checking ? null : onReboot, child: const Text('Reiniciar'))
+          else
+            TextButton(
+              onPressed: checking ? null : onCheck,
+              child: const Text('Verificar'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Diálogo que reinicia el ESP32 y espera a que vuelva.
+class _RebootDialog extends StatefulWidget {
+  final Esp32Service esp32;
+  const _RebootDialog({required this.esp32});
+
+  @override
+  State<_RebootDialog> createState() => _RebootDialogState();
+}
+
+class _RebootDialogState extends State<_RebootDialog> {
+  String _message = 'Enviando la orden de reinicio…';
+  RebootResult? _result;
+  bool _showDetail = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.esp32
+        .rebootAndWait(onProgress: (m) {
+          if (mounted) setState(() => _message = m);
+        })
+        .then((r) {
+          if (mounted) setState(() => _result = r);
+        });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = _result;
+    final (Color color, IconData icon) = switch (r?.outcome) {
+      RebootOutcome.ok => (Colors.green.shade600, Icons.check_circle),
+      RebootOutcome.sdNoResponde => (Colors.red.shade600, Icons.sd_card_alert),
+      RebootOutcome.noVolvio || RebootOutcome.fallo => (Colors.orange.shade700, Icons.warning_amber),
+      null => (Colors.grey, Icons.restart_alt),
+    };
+    return PopScope(
+      canPop: r != null,
+      child: AlertDialog(
+        icon: r == null
+            ? const SizedBox(width: 32, height: 32, child: CircularProgressIndicator())
+            : Icon(icon, color: color, size: 32),
+        title: Text(r == null ? 'Reiniciando ESP32' : 'Reinicio del ESP32'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(r?.message ?? _message),
+            if (r?.technical != null) ...[
+              const SizedBox(height: 8),
+              InkWell(
+                onTap: () => setState(() => _showDetail = !_showDetail),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Detalle técnico',
+                        style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
+                    Icon(_showDetail ? Icons.expand_less : Icons.expand_more, size: 18),
+                  ],
+                ),
+              ),
+              if (_showDetail)
+                SelectableText(r!.technical!,
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+            ],
+          ],
+        ),
+        actions: [
+          if (r != null)
+            FilledButton(onPressed: () => Navigator.pop(context, r), child: const Text('Cerrar')),
         ],
       ),
     );

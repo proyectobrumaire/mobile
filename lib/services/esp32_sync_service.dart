@@ -9,7 +9,23 @@ class Esp32SyncService {
   final Esp32Service esp32;
   final LocalStorageService storage;
 
-  Esp32SyncService(this.esp32, this.storage);
+  /// Espera entre reintentos (inyectable en tests).
+  final Future<void> Function(Duration) _delay;
+
+  Esp32SyncService(this.esp32, this.storage, {Future<void> Function(Duration)? delay})
+      : _delay = delay ?? ((d) => Future<void>.delayed(d));
+
+  /// GET /list reintentando si la SD está ocupada ("SD Busy", transitorio).
+  Future<Esp32FileList> _listWithRetry() async {
+    for (var attempt = 1;; attempt++) {
+      try {
+        return await esp32.listFilesPage();
+      } on Esp32HttpException catch (e) {
+        if (!e.isSdBusy || attempt >= 3) rethrow;
+        await _delay(const Duration(milliseconds: 1500));
+      }
+    }
+  }
 
   static const _keyAt     = 'esp32_sync_at';
   static const _keyPhotos = 'esp32_sync_photos';
@@ -37,22 +53,49 @@ class Esp32SyncService {
     // ── Conexión ──
     yield SyncProgress(SyncStep.conectar, StepStatus.enCurso,
         'Buscando el ESP32 en ${esp32.staHost}…');
-    try {
-      await esp32.ping();
-    } catch (e) {
+    final health = await esp32.checkStatus();
+    if (health.status == Esp32Status.noEncontrado) {
       yield SyncProgress(
         SyncStep.conectar,
         StepStatus.error,
         'No se encontró el ESP32. Verifica que el teléfono esté en la misma red '
         'que la estación y que esté encendida.',
-        technical: 'GET http://${esp32.staHost}/list → $e',
+        technical: health.technical,
       );
       yield SyncProgress.done(
-        const SyncSummary(kind: SyncKind.descarga, errors: 1, fatal: true),
+        const SyncSummary(kind: SyncKind.descarga, errors: 1, fatal: true, logSkipped: true),
+      );
+      return;
+    }
+    if (health.status == Esp32Status.modoAp) {
+      yield SyncProgress(
+        SyncStep.conectar,
+        StepStatus.error,
+        'El ESP32 está en modo configuración (sin WiFi): configura su red antes de descargar.',
+        technical: health.technical,
+      );
+      yield SyncProgress.done(
+        const SyncSummary(kind: SyncKind.descarga, errors: 1, fatal: true, logSkipped: true),
       );
       return;
     }
     yield SyncProgress(SyncStep.conectar, StepStatus.ok, 'Conectado a ${esp32.staHost}.');
+    if (health.status == Esp32Status.sdNoResponde) {
+      // El ESP32 responde pero la SD no: no hay nada que descargar y el log
+      // tampoco se puede leer.
+      yield SyncProgress(
+        SyncStep.listar,
+        StepStatus.error,
+        ErrorMessages.esp32(const Esp32HttpException('GET /list', 500, 'Failed to open Dir')),
+        technical: health.technical,
+      );
+      yield const SyncProgress(SyncStep.log, StepStatus.omitido,
+          'No se procesó porque la SD no responde.');
+      yield SyncProgress.done(
+        const SyncSummary(kind: SyncKind.descarga, errors: 1, fatal: true, logSkipped: true),
+      );
+      return;
+    }
 
     // ── Hora ──
     yield const SyncProgress(SyncStep.hora, StepStatus.enCurso,
@@ -82,6 +125,7 @@ class Esp32SyncService {
     bool sdHasMore = false;
     bool stoppedNoProgress = false;
     bool listFailed = false;
+    bool sdFailed = false;
     bool cancelled = false;
 
     String overallText(bool more) {
@@ -101,14 +145,17 @@ class Esp32SyncService {
 
       Esp32FileList page;
       try {
-        page = await esp32.listFilesPage();
+        page = await _listWithRetry();
       } catch (e) {
         errors++;
         listFailed = true;
+        if (e is Esp32HttpException && e.isSdFailure) sdFailed = true;
         yield SyncProgress(
           SyncStep.listar,
           StepStatus.error,
-          'No se pudo leer la lista de archivos. ${ErrorMessages.esp32(e)}',
+          sdFailed
+              ? ErrorMessages.esp32(e)
+              : 'No se pudo leer la lista de archivos. ${ErrorMessages.esp32(e)}',
           technical: '$e',
         );
         break;
@@ -244,6 +291,10 @@ class Esp32SyncService {
       logSkipped = true;
       yield const SyncProgress(SyncStep.log, StepStatus.omitido,
           'No se procesó porque cancelaste; queda en la SD para la próxima vez.');
+    } else if (sdFailed) {
+      logSkipped = true;
+      yield const SyncProgress(SyncStep.log, StepStatus.omitido,
+          'No se procesó porque la SD no responde.');
     } else {
       yield const SyncProgress(SyncStep.log, StepStatus.enCurso,
           'Descargando el registro de sensores (log.txt)…');

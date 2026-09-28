@@ -28,9 +28,18 @@ class FakeEsp32 extends Esp32Service {
     this.log,
   }) : super(staHost: 'fake');
 
+  /// Respuesta simulada de /list cuando falla (null = responde normal).
+  Esp32HttpException? listError;
+  int listErrorTimes = 1 << 30;
+
   @override
-  Future<void> ping() async {
-    if (!reachable) throw Exception('timeout');
+  Future<Esp32Health> checkStatus({Duration timeout = const Duration(seconds: 10)}) async {
+    if (!reachable) return const Esp32Health(Esp32Status.noEncontrado, 'timeout');
+    final err = listError;
+    if (err != null && listErrorTimes > 0) {
+      return Esp32Health(Esp32Service.classifyList(err.statusCode, err.body), '$err');
+    }
+    return const Esp32Health(Esp32Status.conectado);
   }
 
   @override
@@ -40,6 +49,11 @@ class FakeEsp32 extends Esp32Service {
   Future<Esp32FileList> listFilesPage() async {
     listCalls++;
     if (listCalls > 100) throw StateError('bucle infinito');
+    final err = listError;
+    if (err != null && listErrorTimes > 0) {
+      listErrorTimes--;
+      throw err;
+    }
     final page = sd.take(20).map((n) => Esp32FileInfo(name: n, size: 1)).toList();
     return Esp32FileList(files: page, count: page.length, truncated: sd.length > 20);
   }
@@ -111,7 +125,7 @@ Future<SyncRunState> run(
   bool Function()? isCancelled,
 }) async {
   final state = SyncRunState(SyncKind.descarga);
-  await for (final p in Esp32SyncService(esp, storage)
+  await for (final p in Esp32SyncService(esp, storage, delay: (_) async {})
       .sync(continuous: continuous, isCancelled: isCancelled)) {
     state.apply(p);
   }
@@ -255,4 +269,59 @@ void main() {
   test('photoTimestampFromFilename', () {
     expect(photoTimestampFromFilename('image_26-05-07T08-30-00_2.jpg'), '26-05-07T08-30-00');
   });
+
+  test('SD que no responde al conectar: error claro, sin log ni /reset_log', () async {
+    final esp = FakeEsp32(photoNames(5), log: logV2)
+      ..listError = const Esp32HttpException('GET /list', 500, 'Failed to open Dir');
+    final s = await run(esp, FakeStorage(), continuous: true);
+    expect(step(s, SyncStep.conectar).status, StepStatus.ok);
+    final l = step(s, SyncStep.listar);
+    expect(l.status, StepStatus.error);
+    expect(l.message, contains('SD no responde'));
+    expect(l.technical, contains('Failed to open Dir'));
+    expect(esp.logDownloads, 0);
+    expect(esp.resetCalls, 0);
+    expect(s.summary!.fatal, isTrue);
+  });
+
+  test('SD que deja de responder a mitad: se detiene y no procesa el log', () async {
+    // checkStatus dice conectado, pero /list falla después.
+    final esp2 = _ListFailsEsp(photoNames(5), log: logV2);
+    final s2 = await run(esp2, FakeStorage());
+    expect(step(s2, SyncStep.listar).message, contains('SD no responde'));
+    expect(step(s2, SyncStep.log).status, StepStatus.omitido);
+    expect(esp2.logDownloads, 0);
+  });
+
+  test('SD ocupada: /list se reintenta', () async {
+    final esp = _BusyOnceEsp(photoNames(3), log: logV2);
+    final storage = FakeStorage();
+    final s = await run(esp, storage);
+    expect(storage.photos.length, 3);
+    expect(s.summary!.errors, 0);
+    expect(esp.listCalls, 2);
+  });
+}
+
+/// checkStatus dice conectado, pero /list responde "Failed to open Dir".
+class _ListFailsEsp extends FakeEsp32 {
+  _ListFailsEsp(super.sd, {super.log});
+  @override
+  Future<Esp32FileList> listFilesPage() async {
+    listCalls++;
+    throw const Esp32HttpException('GET /list', 500, 'Failed to open Dir');
+  }
+}
+
+/// El primer /list responde "SD Busy (503)".
+class _BusyOnceEsp extends FakeEsp32 {
+  _BusyOnceEsp(super.sd, {super.log});
+  @override
+  Future<Esp32FileList> listFilesPage() async {
+    if (listCalls == 0) {
+      listCalls++;
+      throw const Esp32HttpException('GET /list', 500, 'SD Busy (503)');
+    }
+    return super.listFilesPage();
+  }
 }

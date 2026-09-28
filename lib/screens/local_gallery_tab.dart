@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/fechas.dart';
 import '../models/gallery_group.dart';
 import '../models/sync_progress.dart';
+import '../services/presigner_config.dart';
 import '../services/backend_service.dart';
 import '../services/backend_sync_service.dart';
 import '../services/local_storage_service.dart';
@@ -101,11 +101,11 @@ class _LocalGalleryTabState extends State<LocalGalleryTab>
   // ─── Subida ────────────────────────────────────────────────────────────────
 
   Future<void> _upload() async {
-    final prefs = await SharedPreferences.getInstance();
-    final url = prefs.getString('presigner_url') ?? '';
-    final secret = prefs.getString('presigner_secret') ?? '';
+    final cfg = await PresignerConfig.load();
+    final url = cfg.url;
+    final secret = cfg.secret;
     if (!mounted) return;
-    if (url.isEmpty || secret.isEmpty) {
+    if (!cfg.isComplete) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Primero configura el servidor (ícono «Presigner S3» en la pantalla principal).'),
       ));

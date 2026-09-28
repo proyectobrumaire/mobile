@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/event_record.dart';
+import '../services/presigner_config.dart';
 import '../services/cloud_gallery_service.dart';
 import '../services/error_messages.dart';
 import '../services/local_storage_service.dart';
@@ -168,10 +168,10 @@ class _CloudEventsTabState extends State<_CloudEventsTab>
     }
     setState(() { _loading = true; _error = null; _errorDetail = null; });
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final url = prefs.getString('presigner_url') ?? '';
-      final secret = prefs.getString('presigner_secret') ?? '';
-      if (url.isEmpty || secret.isEmpty) {
+      final cfg = await PresignerConfig.load();
+      final url = cfg.url;
+      final secret = cfg.secret;
+      if (!cfg.isComplete) {
         if (!mounted) return;
         setState(() {
           _error = 'Configura el servidor (ícono «Presigner S3» en la pantalla principal).';

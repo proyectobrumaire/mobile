@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'cloud_gallery_service.dart';
+import 'esp32_service.dart';
 
 /// Traduce excepciones técnicas a mensajes en lenguaje simple.
 /// El detalle técnico (`'$e'`) se sigue mostrando aparte, oculto por defecto.
@@ -30,6 +31,16 @@ class ErrorMessages {
     }
     if (_isNetwork(e)) {
       return 'Se perdió la conexión con el ESP32. Verifica que el teléfono siga en la misma red.';
+    }
+    if (e is Esp32HttpException) {
+      if (e.isSdFailure) {
+        return 'La tarjeta SD no responde: las fotos y eventos no se están guardando. '
+            'Reinicia la placa con el botón de reinicio (↻ arriba). Si persiste, '
+            'revisa la tarjeta o la alimentación.';
+      }
+      if (e.isSdBusy) {
+        return 'La SD estaba ocupada con otra operación. Intenta de nuevo en unos segundos.';
+      }
     }
     final t = '$e';
     final code = _httpStatus(t);
