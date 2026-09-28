@@ -20,6 +20,50 @@ const sensorLabels = {
   'W1_K': 'Peso del agua',
 };
 
+/// Orden en que se muestran los sensores (el del Arduino; las claves antiguas
+/// al final). Claves desconocidas van después de estas.
+const sensorOrder = [
+  'T1_K', 'T2_K', 'T3_K', 'T4_K', 'T5_K', 'T6_K',
+  'H1_K', 'H2_K', 'P1_K', 'P2_K', 'I4_K', 'W1_K',
+  'E1_K', 'E2_K', 'I1_K', 'I2_K', 'I3_K',
+];
+
+/// Unidad de cada sensor. P2_K es el PWM de la Peltier (0–255) y se formatea aparte.
+const sensorUnits = {
+  'T1_K': '°C', 'T2_K': '°C', 'T3_K': '°C', 'T4_K': '°C', 'T5_K': '°C',
+  'T6_K': '°C', 'E1_K': '°C', 'E2_K': '°C', 'P1_K': '°C',
+  'H1_K': '%', 'H2_K': '%',
+  'I1_K': 'A', 'I2_K': 'A', 'I3_K': 'A', 'I4_K': 'A',
+  'W1_K': 'g',
+};
+
+/// Claves ordenadas según [sensorOrder].
+List<String> orderedSensorKeys(Iterable<String> keys) {
+  final set = keys.toSet();
+  return [
+    ...sensorOrder.where(set.contains),
+    ...set.where((k) => !sensorOrder.contains(k)).toList()..sort(),
+  ];
+}
+
+/// Valor legible con unidad, p. ej. "24.5 °C", "0.35 A", "128 / 255 (50 %)".
+/// null o NaN (sensor sin lectura) → "sin lectura".
+String formatSensorValue(String key, double? value) {
+  if (value == null || value.isNaN || value.isInfinite) return 'sin lectura';
+  if (key == 'P2_K') {
+    final pwm = value.round();
+    return '$pwm / 255 (${(pwm * 100 / 255).round()} %)';
+  }
+  final unit = sensorUnits[key];
+  final decimals = switch (unit) {
+    'A' => 2,
+    'g' => 0,
+    _ => 1,
+  };
+  final text = value.toStringAsFixed(decimals);
+  return unit == null ? text : '$text $unit';
+}
+
 class LogEntry {
   final DateTime timestamp;
   final bool timestampValid;

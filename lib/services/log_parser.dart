@@ -29,6 +29,10 @@ class LogParser {
     }
   }
 
+  /// Timestamp compacto del firmware (YY-MM-DDTHH-MM-SS), también usado en
+  /// los nombres de las fotos. null si no es válido.
+  static DateTime? parseTimestamp(String ts) => _parseTimestamp(ts);
+
   static List<LogEntry> parse(String content) {
     final entries = <LogEntry>[];
 

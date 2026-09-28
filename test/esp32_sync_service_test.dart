@@ -1,0 +1,258 @@
+import 'dart:typed_data';
+
+import 'package:brumaire_mobile/models/log_entry.dart';
+import 'package:brumaire_mobile/models/sync_progress.dart';
+import 'package:brumaire_mobile/services/esp32_service.dart';
+import 'package:brumaire_mobile/services/esp32_sync_service.dart';
+import 'package:brumaire_mobile/services/local_storage_service.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// ESP32 simulado: una SD en memoria; /list devuelve máx. 20 archivos.
+class FakeEsp32 extends Esp32Service {
+  final List<String> sd;
+  final Set<String> failDownload;
+  final Set<String> failDelete;
+  final bool reachable;
+  String? log;
+  int listCalls = 0;
+  int logDownloads = 0;
+  int resetCalls = 0;
+  int downloads = 0;
+
+  FakeEsp32(
+    this.sd, {
+    this.failDownload = const {},
+    this.failDelete = const {},
+    this.reachable = true,
+    this.log,
+  }) : super(staHost: 'fake');
+
+  @override
+  Future<void> ping() async {
+    if (!reachable) throw Exception('timeout');
+  }
+
+  @override
+  Future<void> setTime(DateTime dt) async {}
+
+  @override
+  Future<Esp32FileList> listFilesPage() async {
+    listCalls++;
+    if (listCalls > 100) throw StateError('bucle infinito');
+    final page = sd.take(20).map((n) => Esp32FileInfo(name: n, size: 1)).toList();
+    return Esp32FileList(files: page, count: page.length, truncated: sd.length > 20);
+  }
+
+  @override
+  Future<Uint8List> downloadFile(String filename) async {
+    downloads++;
+    if (failDownload.contains(filename)) throw Exception('GET /download falló: 500');
+    return Uint8List.fromList([1, 2, 3]);
+  }
+
+  @override
+  Future<Uint8List?> tryDownloadFile(String filename) async {
+    logDownloads++;
+    return log == null ? null : Uint8List.fromList(log!.codeUnits);
+  }
+
+  @override
+  Future<void> deleteFile(String filename) async {
+    if (failDelete.contains(filename)) throw Exception('GET /delete falló: 500');
+    sd.remove(filename);
+  }
+
+  @override
+  Future<void> resetLog() async {
+    resetCalls++;
+    log = null;
+  }
+}
+
+/// Almacenamiento en memoria (solo lo que usa Esp32SyncService).
+class FakeStorage implements LocalStorageService {
+  final photos = <String>{};
+  final entries = <LogEntry>[];
+  int maxSeq = -1;
+
+  @override
+  Future<String> savePhotoFile(String filename, Uint8List bytes) async => '/tmp/$filename';
+
+  @override
+  Future<bool> insertPhoto(String filename, String localPath, String? ts) async =>
+      photos.add(filename);
+
+  @override
+  Future<int> maxStoredSeq() async => maxSeq;
+
+  @override
+  Future<int> insertLogEntries(List<LogEntry> list) async {
+    entries.addAll(list);
+    for (final e in list) {
+      if (e.seq != null && e.seq! > maxSeq) maxSeq = e.seq!;
+    }
+    return list.length;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+List<String> photoNames(int n, {String prefix = '26-05-07T08-00'}) => [
+      for (var i = 0; i < n; i++)
+        'image_$prefix-${(i ~/ 3).toString().padLeft(2, '0')}_${i % 3}.jpg',
+    ];
+
+Future<SyncRunState> run(
+  FakeEsp32 esp,
+  FakeStorage storage, {
+  bool continuous = false,
+  bool Function()? isCancelled,
+}) async {
+  final state = SyncRunState(SyncKind.descarga);
+  await for (final p in Esp32SyncService(esp, storage)
+      .sync(continuous: continuous, isCancelled: isCancelled)) {
+    state.apply(p);
+  }
+  return state;
+}
+
+SyncStepState step(SyncRunState s, SyncStep step) =>
+    s.steps.firstWhere((x) => x.step == step);
+
+const logV2 = '26-05-07T08-00-00,1,BIRD,-,0\n'
+    '26-05-07T08-00-00,2,-,T1_K,24.500\n'
+    '26-05-07T08-00-00,3,-,H1_K,60.000\n';
+
+void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('un solo lote: descarga máx. 20 y avisa que quedan más', () async {
+    final esp = FakeEsp32(photoNames(45), log: logV2);
+    final storage = FakeStorage();
+    final s = await run(esp, storage);
+
+    expect(storage.photos.length, 20);
+    expect(esp.sd.length, 25);
+    expect(esp.listCalls, 1);
+    expect(s.summary!.newPhotos, 20);
+    expect(s.summary!.newLines, 3);
+    expect(s.summary!.warnings, greaterThan(0));
+    expect(step(s, SyncStep.fotos).message, contains('Descarga continua'));
+    expect(esp.logDownloads, 1);
+  });
+
+  test('continua: repite mientras truncated y vacía la SD; log una sola vez', () async {
+    final esp = FakeEsp32(photoNames(45), log: logV2);
+    final storage = FakeStorage();
+    final s = await run(esp, storage, continuous: true);
+
+    expect(esp.sd, isEmpty);
+    expect(storage.photos.length, 45);
+    expect(esp.listCalls, 3);
+    expect(esp.logDownloads, 1);
+    expect(esp.resetCalls, 1);
+    expect(s.summary!.errors, 0);
+    expect(s.summary!.text, '45 fotos nuevas, 3 lecturas, sin errores');
+    expect(step(s, SyncStep.fotos).status, StepStatus.ok);
+  });
+
+  test('continua: si ninguna foto del lote se descarga, se detiene', () async {
+    final names = photoNames(45);
+    final esp = FakeEsp32(names, failDownload: names.toSet());
+    final storage = FakeStorage();
+    final s = await run(esp, storage, continuous: true);
+
+    expect(esp.listCalls, 1);
+    expect(esp.downloads, 20);
+    expect(storage.photos, isEmpty);
+    expect(step(s, SyncStep.fotos).status, StepStatus.error);
+    expect(step(s, SyncStep.fotos).message, contains('bucle'));
+    expect(s.summary!.errors, 20);
+  });
+
+  test('continua: fotos que fallan no se reintentan y no bloquean al resto', () async {
+    final names = photoNames(45);
+    final bad = names.take(5).toSet();
+    final esp = FakeEsp32(names, failDownload: bad);
+    final storage = FakeStorage();
+    final s = await run(esp, storage, continuous: true);
+
+    expect(storage.photos.length, 40);
+    expect(esp.sd.toSet(), bad);
+    expect(esp.downloads, 45); // cada foto mala se intentó una sola vez
+    expect(s.summary!.errors, 5);
+    expect(step(s, SyncStep.fotos).issues.length, 5);
+  });
+
+  test('continua: si /delete falla siempre, no entra en bucle', () async {
+    final names = photoNames(25);
+    final esp = FakeEsp32(names, failDelete: names.toSet());
+    final storage = FakeStorage();
+    final s = await run(esp, storage, continuous: true);
+
+    expect(esp.listCalls, lessThanOrEqualTo(3));
+    expect(step(s, SyncStep.fotos).status, StepStatus.error);
+  });
+
+  test('cancelar: se detiene entre fotos y no procesa log.txt ni /reset_log', () async {
+    final esp = FakeEsp32(photoNames(45), log: logV2);
+    final storage = FakeStorage();
+    final s = await run(esp, storage,
+        continuous: true, isCancelled: () => storage.photos.length >= 3);
+
+    expect(storage.photos.length, 3);
+    expect(esp.sd.length, 42);
+    expect(esp.logDownloads, 0);
+    expect(esp.resetCalls, 0);
+    expect(s.summary!.cancelled, isTrue);
+    expect(s.summary!.logSkipped, isTrue);
+    expect(s.summary!.title, 'Descarga cancelada');
+    expect(s.summary!.text, contains('3 fotos nuevas'));
+    expect(step(s, SyncStep.log).status, StepStatus.omitido);
+  });
+
+  test('progreso: barra por lote, contador acumulado con "quedan más"', () async {
+    final esp = FakeEsp32(photoNames(30));
+    final events = <SyncProgress>[];
+    await for (final p in Esp32SyncService(esp, FakeStorage()).sync(continuous: true)) {
+      events.add(p);
+    }
+    final photoEvents = events.where((e) => e.step == SyncStep.fotos && e.total != null);
+    // El total de la barra nunca supera el tamaño de un lote.
+    expect(photoEvents.every((e) => e.total! <= 20), isTrue);
+    expect(photoEvents.first.overallOngoing, isTrue);
+    expect(photoEvents.first.overall, contains('quedan más'));
+  });
+
+  test('ESP32 inalcanzable: error claro y resumen fatal', () async {
+    final s = await run(FakeEsp32([], reachable: false), FakeStorage());
+    final c = step(s, SyncStep.conectar);
+    expect(c.status, StepStatus.error);
+    expect(c.message, contains('misma red'));
+    expect(c.technical, isNotNull);
+    expect(s.summary!.fatal, isTrue);
+  });
+
+  test('log: solo importa líneas con seq mayor al máximo ya importado', () async {
+    final esp = FakeEsp32([], log: logV2);
+    final storage = FakeStorage()..maxSeq = 2;
+    final s = await run(esp, storage);
+    expect(storage.entries.length, 1);
+    expect(s.summary!.newLines, 1);
+  });
+
+  test('parseList lee files, count y truncated', () {
+    final l = Esp32Service.parseList(
+        '{"files":[{"name":"a.jpg","size":10},{"name":"log.txt","size":5}], "count":2, "truncated":true}');
+    expect(l.files.map((f) => f.name), ['a.jpg', 'log.txt']);
+    expect(l.count, 2);
+    expect(l.truncated, isTrue);
+    expect(Esp32Service.parseList('{"files":[]}').truncated, isFalse);
+  });
+
+  test('photoTimestampFromFilename', () {
+    expect(photoTimestampFromFilename('image_26-05-07T08-30-00_2.jpg'), '26-05-07T08-30-00');
+  });
+}

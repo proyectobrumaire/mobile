@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/esp32_service.dart';
-import '../services/backend_service.dart';
 import '../services/esp32_sync_service.dart';
-import '../services/backend_sync_service.dart';
 import '../services/local_storage_service.dart';
+import '../services/sync_run_controller.dart';
 import '../models/sync_progress.dart';
+import '../widgets/sync_progress_view.dart';
 import 'setup_screen.dart';
 import 'gallery_screen.dart';
-import 'cloud_gallery_screen.dart';
+import 'events_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,10 +19,9 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _storage = LocalStorageService();
-  final _log = <SyncProgress>[];
-  final _scrollCtrl = ScrollController();
+  final _sync = SyncRunController.instance;
+  int _seenRuns = 0;
 
-  bool _syncing = false;
   bool _esp32Reachable = false;
   bool _checking = false;
   String _esp32Host = Esp32Service.defaultStaHost;
@@ -33,14 +32,25 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _seenRuns = _sync.finishedRuns;
+    _sync.addListener(_onSyncChanged);
     _loadEsp32Host().then((_) => _checkConnection());
     _loadStats();
   }
 
   @override
   void dispose() {
-    _scrollCtrl.dispose();
+    _sync.removeListener(_onSyncChanged);
     super.dispose();
+  }
+
+  void _onSyncChanged() {
+    if (!mounted) return;
+    if (_sync.finishedRuns != _seenRuns) {
+      _seenRuns = _sync.finishedRuns;
+      _loadStats();
+    }
+    setState(() {});
   }
 
   Future<void> _loadStats() async {
@@ -63,62 +73,64 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() { _esp32Reachable = ok; _checking = false; });
   }
 
-  Future<String> _getPresignerUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('presigner_url') ?? '';
-  }
-
-  Future<String> _getPresignerSecret() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('presigner_secret') ?? '';
-  }
-
-  void _runStream(Stream<SyncProgress> stream) {
-    setState(() { _syncing = true; _log.clear(); });
-    stream.listen(
-      (p) {
-        setState(() => _log.add(p));
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollCtrl.hasClients) {
-            _scrollCtrl.animateTo(
-              _scrollCtrl.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 150),
-              curve: Curves.easeOut,
-            );
-          }
-        });
-      },
-      onDone: () async {
-        await _loadStats();
-        if (mounted) setState(() => _syncing = false);
-      },
-      onError: (e) {
-        if (mounted) {
-          setState(() {
-            _log.add(SyncProgress('Error inesperado: $e', isError: true));
-            _syncing = false;
-          });
-        }
-      },
+  /// Pregunta el modo (un lote o continua) y arranca la descarga.
+  Future<void> _startEsp32Sync() async {
+    var continuous = await Esp32SyncService.loadContinuousPref();
+    if (!mounted) return;
+    final start = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          icon: const Icon(Icons.sd_card_outlined),
+          title: const Text('Descargar SD'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Se descargan las fotos y el registro de sensores. Cada foto se '
+                'borra de la SD cuando ya quedó guardada en el teléfono.',
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Descarga continua'),
+                subtitle: Text(continuous
+                    ? 'Repite lote tras lote hasta vaciar la SD. Puede tardar; '
+                        'puedes cancelar en cualquier momento.'
+                    : 'Solo un lote (hasta 20 archivos).'),
+                value: continuous,
+                onChanged: (v) => setDialog(() => continuous = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.download_rounded),
+              label: const Text('Iniciar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (start != true) return;
+    await Esp32SyncService.saveContinuousPref(continuous);
+    final esp32 = _makeEsp32Service();
+    _sync.start(
+      SyncKind.descarga,
+      (isCancelled) => Esp32SyncService(esp32, _storage)
+          .sync(continuous: continuous, isCancelled: isCancelled),
     );
   }
 
-  void _startEsp32Sync() {
-    _runStream(
-      Esp32SyncService(_makeEsp32Service(), _storage).sync(),
+  Future<void> _openGallery() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const GalleryScreen()),
     );
-  }
-
-  Future<void> _startBackendSync() async {
-    final url = await _getPresignerUrl();
-    final secret = await _getPresignerSecret();
-    if (url.isEmpty || secret.isEmpty) {
-      await _showBackendDialog();
-      return;
-    }
-    _runStream(
-      BackendSyncService(BackendService(url, secret), _storage).sync(),
-    );
+    _loadStats();
   }
 
   Future<void> _showEsp32HostDialog() async {
@@ -221,24 +233,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final state = _sync.state;
+    final downloading = _sync.running && state?.kind == SyncKind.descarga;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Brumaire'),
         actions: [
           IconButton(
             icon: const Icon(Icons.photo_library_outlined),
-            tooltip: 'Galería local',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const GalleryScreen()),
-            ),
+            tooltip: 'Galería',
+            onPressed: _openGallery,
           ),
           IconButton(
-            icon: const Icon(Icons.cloud_outlined),
-            tooltip: 'Galería Cloud',
+            icon: const Icon(Icons.timeline),
+            tooltip: 'Eventos',
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const CloudGalleryScreen()),
+              MaterialPageRoute(builder: (_) => const EventsScreen()),
             ),
           ),
           IconButton(
@@ -266,49 +277,51 @@ class _HomeScreenState extends State<HomeScreen> {
             host: _esp32Host,
             onCheck: _checkConnection,
           ),
-          _StatsCard(lastSync: _lastSync, pending: _pending),
+          _StatsCard(lastSync: _lastSync, pending: _pending, onTapPending: _openGallery),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: _syncing ? null : _startEsp32Sync,
-                    icon: const Icon(Icons.download_rounded),
-                    label: const Text('Descargar SD'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: _syncing ? null : _startBackendSync,
-                    icon: const Icon(Icons.cloud_upload_outlined),
-                    label: const Text('Subir al servidor'),
-                  ),
-                ),
-              ],
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: downloading
+                  ? OutlinedButton.icon(
+                      onPressed: _sync.cancelRequested ? null : _sync.cancel,
+                      icon: const Icon(Icons.stop_circle_outlined),
+                      label: Text(_sync.cancelRequested
+                          ? 'Cancelando…'
+                          : 'Cancelar descarga'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Theme.of(context).colorScheme.error,
+                      ),
+                    )
+                  : FilledButton.icon(
+                      onPressed: _sync.running ? null : _startEsp32Sync,
+                      icon: const Icon(Icons.download_rounded),
+                      label: const Text('Descargar SD'),
+                    ),
             ),
           ),
-          if (_syncing)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: LinearProgressIndicator(),
-            ),
           const Divider(height: 1),
           Expanded(
-            child: _log.isEmpty
+            child: state == null
                 ? const Center(
-                    child: Text(
-                      'Descarga datos del ESP32 o sube\nlos pendientes al servidor.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'Descarga las fotos y lecturas de la estación.\n'
+                                'Para subirlas al servidor, abre la Galería.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey),
+                      ),
                     ),
                   )
-                : ListView.builder(
-                    controller: _scrollCtrl,
+                : SingleChildScrollView(
                     padding: const EdgeInsets.all(12),
-                    itemCount: _log.length,
-                    itemBuilder: (_, i) => _LogLine(entry: _log[i]),
+                    child: SyncProgressView(
+                      state: state,
+                      cancelRequested: _sync.cancelRequested,
+                      onCancel: _sync.cancel,
+                      onClose: _sync.clear,
+                    ),
                   ),
           ),
         ],
@@ -322,8 +335,9 @@ class _HomeScreenState extends State<HomeScreen> {
 class _StatsCard extends StatelessWidget {
   final ({DateTime? at, int photos, int lines})? lastSync;
   final PendingCounts? pending;
+  final VoidCallback onTapPending;
 
-  const _StatsCard({this.lastSync, this.pending});
+  const _StatsCard({this.lastSync, this.pending, required this.onTapPending});
 
   String _timeAgo(DateTime dt) {
     final d = DateTime.now().difference(dt);
@@ -350,7 +364,7 @@ class _StatsCard extends StatelessWidget {
               lines: [
                 if (lastSync != null && lastSync!.at != null) ...[
                   '↓ ${lastSync!.photos} fotos nuevas',
-                  '↓ ${lastSync!.lines} líneas nuevas',
+                  '↓ ${lastSync!.lines} lecturas nuevas',
                 ] else
                   'Nunca sincronizado',
               ],
@@ -360,16 +374,21 @@ class _StatsCard extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: _StatBox(
-              label: 'Pendiente de subir',
-              lines: [
-                '${pending?.photos ?? 0} fotos · ${pending?.logLines ?? 0} líneas',
-                if ((pending?.invalidTimestamps ?? 0) > 0)
-                  '⚠ ${pending!.invalidTimestamps} con TS inválido',
-              ],
-              color: colorScheme.surfaceContainerLow,
-              textTheme: textTheme,
-              warning: (pending?.invalidTimestamps ?? 0) > 0,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: onTapPending,
+              child: _StatBox(
+                label: 'Pendiente de subir ›',
+                lines: [
+                  '${pending?.photos ?? 0} fotos · ${pending?.logLines ?? 0} lecturas',
+                  if ((pending?.invalidTimestamps ?? 0) > 0)
+                    '⚠ ${pending!.invalidTimestamps} con fecha inválida',
+                  'Súbelas desde la Galería',
+                ],
+                color: colorScheme.surfaceContainerLow,
+                textTheme: textTheme,
+                warning: (pending?.invalidTimestamps ?? 0) > 0,
+              ),
             ),
           ),
         ],
@@ -467,25 +486,6 @@ class _ConnectionBanner extends StatelessWidget {
             child: const Text('Verificar'),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _LogLine extends StatelessWidget {
-  final SyncProgress entry;
-  const _LogLine({required this.entry});
-
-  @override
-  Widget build(BuildContext context) {
-    Color? color;
-    if (entry.isError) color = Colors.red.shade700;
-    if (entry.isWarning) color = Colors.orange.shade800;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Text(
-        entry.message,
-        style: TextStyle(fontSize: 13, fontFamily: 'monospace', color: color),
       ),
     );
   }

@@ -8,6 +8,19 @@ class Esp32FileInfo {
   const Esp32FileInfo({required this.name, required this.size});
 }
 
+/// Respuesta completa de GET /list. El ESP32 devuelve máx. 20 archivos;
+/// `truncated` indica que en la SD quedan más.
+class Esp32FileList {
+  final List<Esp32FileInfo> files;
+  final int count;
+  final bool truncated;
+  const Esp32FileList({
+    required this.files,
+    required this.count,
+    required this.truncated,
+  });
+}
+
 class Esp32Service {
   static const String defaultStaHost = 'esp32cam.local';
   static const String _apHost = '192.168.4.1';
@@ -25,26 +38,45 @@ class Esp32Service {
 
   Future<bool> isReachable() async {
     try {
-      final res = await http.get(_staUri('/list')).timeout(_shortTimeout);
-      return res.statusCode == 200;
+      await ping();
+      return true;
     } catch (_) {
       return false;
     }
   }
 
-  Future<List<Esp32FileInfo>> listFiles() async {
+  /// Como isReachable, pero lanza la excepción para poder mostrar el detalle.
+  Future<void> ping() async {
     final res = await http.get(_staUri('/list')).timeout(_shortTimeout);
     if (res.statusCode != 200) {
       throw Exception('GET /list falló: ${res.statusCode}');
     }
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final files = data['files'] as List<dynamic>;
-    return files
+  }
+
+  Future<List<Esp32FileInfo>> listFiles() async => (await listFilesPage()).files;
+
+  /// GET /list con `count` y `truncated`.
+  Future<Esp32FileList> listFilesPage() async {
+    final res = await http.get(_staUri('/list')).timeout(_shortTimeout);
+    if (res.statusCode != 200) {
+      throw Exception('GET /list falló: ${res.statusCode}');
+    }
+    return parseList(res.body);
+  }
+
+  static Esp32FileList parseList(String body) {
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    final files = (data['files'] as List<dynamic>)
         .map((f) => Esp32FileInfo(
               name: f['name'] as String,
-              size: f['size'] as int,
+              size: (f['size'] as num).toInt(),
             ))
         .toList();
+    return Esp32FileList(
+      files: files,
+      count: (data['count'] as num?)?.toInt() ?? files.length,
+      truncated: data['truncated'] == true,
+    );
   }
 
   Future<Uint8List> downloadFile(String filename) async {

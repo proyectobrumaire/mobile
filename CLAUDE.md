@@ -10,10 +10,12 @@ Código, comentarios y commits en español.
 
 ## Flujo
 
-1. **"Descargar SD"** (`Esp32SyncService`, teléfono en la misma red que el ESP32, `esp32cam.local`): sincroniza la hora (`/set_time`), lista (`/list`, máx. 20 archivos), descarga y borra cada foto, descarga `log.txt` directo (no depende de `/list`), lo parsea (`LogParser`, formatos V1 y V2), guarda en SQLite solo las líneas con `seq` mayor al máximo guardado y hace `/reset_log`.
-2. **"Subir al servidor"** (`BackendSyncService`): pide URLs firmadas al presigner (`x-api-key`) y hace PUT directo a S3 (`images/raw/...`, `logs/app/...` como JSON).
-- Galería local: fotos agrupadas por timestamp con los sensores del mismo instante. Galería cloud: `POST /gallery` a la Lambda.
-- `sync_service.dart` es el flujo antiguo de un solo paso: código muerto.
+1. **"Descargar SD"** (pantalla principal → diálogo con "Descarga continua", recordada en SharedPreferences; `Esp32SyncService`, teléfono en la misma red que el ESP32, `esp32cam.local`): sincroniza la hora (`/set_time`), lista (`/list`, máx. 20 archivos + `truncated`), descarga y borra cada foto (guardado atómico `.part` → rename). En modo continuo repite listar→descargar mientras `truncated` sea `true`; se detiene si un lote no saca ninguna foto de la SD (anti-bucle) y no reintenta en la misma corrida una foto que ya falló. Al final descarga `log.txt` directo (no depende de `/list`), lo parsea (`LogParser`, formatos V1 y V2), guarda en SQLite solo las líneas con `seq` mayor al high-water mark (tabla `meta`, clave `max_seq_importado`; no depende de las filas porque se borran tras subir) y hace `/reset_log`. Cancelación cooperativa entre fotos; si se cancela no se procesa el log ni se hace `/reset_log`.
+2. **"Subir al servidor"** (Galería → pestaña Local; `BackendSyncService`): pide URLs firmadas al presigner (`x-api-key`) y hace PUT directo a S3 (`images/raw/...`, `logs/app/...` como JSON). Cada foto subida se borra del teléfono (archivo y fila). Las lecturas subidas se borran también, salvo las del mismo timestamp que una foto que sigue en el teléfono (`purgeUploadedLogEntries`).
+- Progreso: los servicios emiten `SyncProgress` estructurado (paso, estado, progreso del lote, contador acumulado, incidencias, resumen); `SyncRunController.instance` ejecuta una sincronización a la vez y la UI la dibuja con `SyncProgressView`. Mensajes de error en lenguaje simple en `ErrorMessages`, con el detalle técnico expandible.
+- Galería (`GalleryScreen`, pestañas): **Local** = fotos del teléfono (pendientes de subir) por día y evento, visor con zoom/deslizar y sensores con unidades, borrado manual (foto, evento o selección múltiple con confirmación). **Cloud** = fuentes `CloudGallerySource` registradas en `cloudGallerySources()` (la primera es la de por defecto): "Todas" (`POST /photos`, por día; muestra `image_url` o, si falta, `raw_url`, más detecciones y sensores) y "Aves" (`POST /gallery`, por especie).
+- Eventos (`EventsScreen`, ícono de línea de tiempo en la pantalla principal): eventos del log excepto BIRD, en línea de tiempo por día con filtro por tipo (chips) y detalle con sensores. **Local** = líneas `type=event` pendientes de subir (`pendingEventEntries`) con las lecturas del mismo timestamp; **Cloud** = `POST /events` pidiendo `types` explícitos (sin BIRD, para no gastar el límite de 500; "Otros" = `INVALID_EV`). Las líneas de evento se suben con el resto del log y luego se purgan del teléfono.
+- API de consulta de la nube: contrato en `~/Brumaire/.claude/contracts/api-fotos-eventos.md` (no cambiarlo desde aquí). Cliente en `CloudGalleryService` (`fetch`, `fetchPhotos`, `fetchEvents`; acepta un `http.Client` para tests). Respuestas con `truncated` muestran un aviso (máx. 500 elementos).
 
 ## Configuración
 
@@ -27,6 +29,5 @@ Código, comentarios y commits en español.
 
 ## Pendientes conocidos
 
-- "Descargar SD" procesa solo lo que devuelve `/list` (máx. 20); no repite mientras `truncated` sea `true`.
-- Las fotos no se borran del teléfono tras subirlas (solo se marcan `uploaded = 1`).
-- Los eventos sin foto (PERIODIC, PELTIER, VOLCADO) no se muestran en ninguna pantalla.
+- No se conoce el total de archivos de la SD (el firmware no lo reporta; decisión del usuario): la barra de progreso es por lote y el total es un contador.
+- `POST /photos` y `POST /events` se probaron solo con respuestas simuladas hasta que la nube los despliegue (un 404 se muestra como "falta desplegar la nube").
