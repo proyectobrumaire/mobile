@@ -62,6 +62,18 @@ void main() {
       expect(days.last.groups.single.photos.single.id, 5);
     });
 
+    test('photosForEvent: fotos del evento BIRD por timestamp exacto, en orden', () {
+      final photos = [
+        photo(1, '26-05-07T08-00-00', 2),
+        photo(2, '26-05-07T08-00-00', 0),
+        photo(3, '26-05-07T08-00-01', 0), // un segundo después: otro evento
+        photo(4, '26-05-07T08-00-00', 1),
+        const StoredPhoto(id: 5, filename: 'raro.jpg', localPath: '/x/raro.jpg'),
+      ];
+      expect(photosForEvent(photos, DateTime(2026, 5, 7, 8)).map((p) => p.id), [2, 4, 1]);
+      expect(photosForEvent(photos, DateTime(2026, 5, 7, 9)), isEmpty);
+    });
+
     test('sin fotos → lista vacía', () {
       expect(buildGalleryDays([], []), isEmpty);
     });
@@ -82,6 +94,21 @@ void main() {
     test('orderedSensorKeys respeta el orden del Arduino', () {
       expect(orderedSensorKeys(['W1_K', 'Z0_K', 'T1_K', 'H1_K']),
           ['T1_K', 'H1_K', 'W1_K', 'Z0_K']);
+      expect(orderedSensorKeys(['L1_K', 'W1_K', 'T1_K', 'E1_K']),
+          ['T1_K', 'W1_K', 'L1_K', 'E1_K']);
+    });
+
+    test('L1_K (lluvia) es booleano: Sí/No sin unidad ni decimales', () {
+      expect(sensorLabels['L1_K'], 'Lluvia');
+      expect(formatSensorValue('L1_K', 1.0), 'Sí');
+      expect(formatSensorValue('L1_K', 0.0), 'No');
+      expect(formatSensorValue('L1_K', 0.5), 'Sí');
+      expect(formatSensorValue('L1_K', 0.49), 'No');
+      expect(formatSensorValue('L1_K', double.nan), 'sin lectura');
+      expect(formatSensorValue('L1_K', null), 'sin lectura');
+      expect(sensorBool(1), isTrue);
+      expect(sensorBool(0), isFalse);
+      expect(sensorBool(null), isNull);
     });
   });
 

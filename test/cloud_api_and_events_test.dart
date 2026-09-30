@@ -164,18 +164,20 @@ void main() {
         timestamp: t, timestampValid: true, type: EntryType.sensorData,
         sensorKey: k, sensorValue: v, rawLine: '');
 
-    test('eventsFromLogEntries: excluye BIRD y cruza sensores por timestamp exacto', () {
+    test('eventsFromLogEntries: incluye BIRD y cruza sensores por timestamp exacto', () {
       final records = eventsFromLogEntries([
         ev(t1, 'PERIODIC'), se(t1, 'T1_K', 24.5), se(t1, 'H1_K', 60),
         ev(t2, 'BIRD'), se(t2, 'T1_K', 20),
         ev(t2, 'VOLCADO'),
         ev(DateTime(2026, 9, 27, 9), 'INVALID_EV', valid: false),
       ]);
-      expect(records.map((r) => r.event), ['PERIODIC', 'VOLCADO', 'INVALID_EV']);
+      expect(records.map((r) => r.event), ['PERIODIC', 'BIRD', 'VOLCADO', 'INVALID_EV']);
       expect(records[0].sensors, {'T1_K': 24.5, 'H1_K': 60});
       expect(records[1].sensors, {'T1_K': 20});
-      expect(records[2].sensors, isEmpty);
-      expect(records[2].category, otrosEventos);
+      expect(records[1].label, 'Ave detectada');
+      expect(records[2].sensors, {'T1_K': 20});
+      expect(records[3].sensors, isEmpty);
+      expect(records[3].category, otrosEventos);
     });
 
     test('groupEventsByDay: filtra por categoría, más reciente primero, inválidos al final', () {
@@ -186,19 +188,26 @@ void main() {
         EventRecord(timestamp: t1, event: 'BIRD'),
         EventRecord(timestamp: t1, event: 'XYZ', timestampValid: false),
       ];
+      // Local: todas las categorías, BIRD incluido.
       final all = groupEventsByDay(records, eventCategories.toSet());
       expect(all.map((d) => d.date), [DateTime(2026, 9, 27), DateTime(2026, 9, 26), null]);
-      expect(all.first.events.map((e) => e.event), ['BOOT', 'PERIODIC']);
-      expect(all.expand((d) => d.events).any((e) => e.event == 'BIRD'), isFalse);
+      expect(all.first.events.map((e) => e.event), ['BOOT', 'PERIODIC', 'BIRD']);
+      // Cloud: sin BIRD.
+      final cloud = groupEventsByDay(records, cloudEventCategories.toSet());
+      expect(cloud.expand((d) => d.events).any((e) => e.event == 'BIRD'), isFalse);
+      expect(groupEventsByDay(records, {'BIRD'}).single.events.single.event, 'BIRD');
 
       final onlyVolcado = groupEventsByDay(records, {'VOLCADO'});
       expect(onlyVolcado.single.events.single.event, 'VOLCADO');
       expect(groupEventsByDay(records, {}), isEmpty);
       expect(countByCategory(records),
-          {'VOLCADO': 1, 'PERIODIC': 1, 'BOOT': 1, otrosEventos: 1});
+          {'VOLCADO': 1, 'PERIODIC': 1, 'BOOT': 1, 'BIRD': 1, otrosEventos: 1});
+      expect(eventCategories.first, 'BIRD');
+      expect(categoryLabel('BIRD'), 'Ave');
+      expect(cloudEventCategories.contains('BIRD'), isFalse);
     });
 
-    test('cloudTypesFor: nunca pide BIRD; "Otros" → INVALID_EV', () {
+    test('cloudTypesFor: nunca pide BIRD (aunque esté elegido); "Otros" → INVALID_EV', () {
       expect(cloudTypesFor(eventCategories.toSet()),
           ['PERIODIC', 'BOOT', 'PELTIER_ON', 'PELTIER_OFF', 'VOLCADO', 'INVALID_EV']);
       expect(cloudTypesFor({otrosEventos, 'VOLCADO'}), ['VOLCADO', 'INVALID_EV']);
@@ -213,6 +222,8 @@ void main() {
       expect(eventLabelFor('FOO'), 'Evento FOO');
       expect(sensorSummary({'T1_K': 24.5, 'P2_K': 128, 'W1_K': 150}),
           '24.5 °C · PWM 128 · 150 g');
+      expect(sensorSummary({'T1_K': 24.5, 'L1_K': 1}), '24.5 °C · Lluvia: Sí');
+      expect(sensorSummary({'L1_K': 0}), 'Lluvia: No');
     });
   });
 

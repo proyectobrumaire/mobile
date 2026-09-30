@@ -59,7 +59,7 @@ void main() {
           title: 'Hoy · 08:30:00',
           subtitle: 'Ave detectada · foto 1 de 3',
           status: (text: 'Pendiente de subir', color: Colors.orange, icon: Icons.cloud_upload),
-          sensors: const {'T1_K': 24.5, 'P2_K': 128, 'W1_K': double.nan},
+          sensors: const {'T1_K': 24.5, 'P2_K': 128, 'W1_K': double.nan, 'L1_K': 1},
         ),
         const ViewerPhoto(image: null, title: 'otra'),
       ]),
@@ -69,6 +69,9 @@ void main() {
     expect(find.text('24.5 °C'), findsOneWidget);
     expect(find.text('128 / 255 (50 %)'), findsOneWidget);
     expect(find.text('sin lectura'), findsOneWidget);
+    expect(find.text('Lluvia'), findsOneWidget);
+    expect(find.text('Sí'), findsOneWidget);
+    expect(find.byIcon(Icons.water_drop), findsOneWidget);
     expect(find.text('Pendiente de subir'), findsOneWidget);
   });
 
@@ -103,7 +106,8 @@ void main() {
     expect(find.text('Hoy'), findsOneWidget);
     expect(find.text('Reporte periódico'), findsOneWidget);
     expect(find.text('Vaciado del plato'), findsOneWidget);
-    expect(find.text('Ave detectada'), findsNothing);
+    expect(find.text('Ave detectada'), findsOneWidget);
+    expect(find.byIcon(Icons.photo_library_outlined), findsOneWidget);
     await tester.tap(find.text('Reporte periódico'));
     await tester.pumpAndSettle();
     expect(find.text('Temp. ambiente'), findsOneWidget);
@@ -132,5 +136,25 @@ void main() {
     // Ocupa todo el ancho del panel (no queda comprimido por la etiqueta de estado).
     expect(tester.getSize(finder).width, greaterThan(200));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('EventTimeline: tocar un BIRD usa onTapEvent (abre sus fotos), no el detalle',
+      (tester) async {
+    final t = DateTime.now();
+    EventRecord? tapped;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: EventTimeline(
+          days: groupEventsByDay(
+              [EventRecord(timestamp: t, event: 'BIRD', sensors: const {'T1_K': 20})],
+              eventCategories.toSet()),
+          onTapEvent: (_, ev) => tapped = ev,
+        ),
+      ),
+    ));
+    await tester.tap(find.text('Ave detectada'));
+    await tester.pumpAndSettle();
+    expect(tapped?.event, 'BIRD');
+    expect(find.text('Código: BIRD'), findsNothing); // no abrió el detalle
   });
 }

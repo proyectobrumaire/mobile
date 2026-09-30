@@ -8,9 +8,9 @@ enum SyncKind { descarga, subida }
 enum SyncStep {
   conectar('Conectar con el ESP32'),
   hora('Sincronizar la hora'),
+  log('Procesar el log de sensores'),
   listar('Revisar la SD'),
   fotos('Descargar fotos'),
-  log('Procesar el log de sensores'),
   subirFotos('Subir fotos'),
   subirLog('Subir lecturas de sensores'),
   resumen('Resumen');

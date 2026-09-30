@@ -19,6 +19,10 @@ class FakeEsp32 extends Esp32Service {
   int logDownloads = 0;
   int resetCalls = 0;
   int downloads = 0;
+  bool failLog = false;
+
+  /// Orden de las llamadas relevantes ("list", "log", "reset", "photo").
+  final calls = <String>[];
 
   FakeEsp32(
     this.sd, {
@@ -48,6 +52,7 @@ class FakeEsp32 extends Esp32Service {
   @override
   Future<Esp32FileList> listFilesPage() async {
     listCalls++;
+    calls.add('list');
     if (listCalls > 100) throw StateError('bucle infinito');
     final err = listError;
     if (err != null && listErrorTimes > 0) {
@@ -61,6 +66,7 @@ class FakeEsp32 extends Esp32Service {
   @override
   Future<Uint8List> downloadFile(String filename) async {
     downloads++;
+    calls.add('photo');
     if (failDownload.contains(filename)) throw Exception('GET /download falló: 500');
     return Uint8List.fromList([1, 2, 3]);
   }
@@ -68,6 +74,8 @@ class FakeEsp32 extends Esp32Service {
   @override
   Future<Uint8List?> tryDownloadFile(String filename) async {
     logDownloads++;
+    calls.add('log');
+    if (failLog) throw Exception('GET /download falló: 500');
     return log == null ? null : Uint8List.fromList(log!.codeUnits);
   }
 
@@ -80,6 +88,7 @@ class FakeEsp32 extends Esp32Service {
   @override
   Future<void> resetLog() async {
     resetCalls++;
+    calls.add('reset');
     log = null;
   }
 }
@@ -210,7 +219,7 @@ void main() {
     expect(step(s, SyncStep.fotos).status, StepStatus.error);
   });
 
-  test('cancelar: se detiene entre fotos y no procesa log.txt ni /reset_log', () async {
+  test('cancelar durante las fotos: se detiene entre fotos y el log ya quedó procesado', () async {
     final esp = FakeEsp32(photoNames(45), log: logV2);
     final storage = FakeStorage();
     final s = await run(esp, storage,
@@ -218,13 +227,47 @@ void main() {
 
     expect(storage.photos.length, 3);
     expect(esp.sd.length, 42);
-    expect(esp.logDownloads, 0);
-    expect(esp.resetCalls, 0);
+    expect(esp.logDownloads, 1);
+    expect(esp.resetCalls, 1);
+    expect(storage.entries.length, 3);
+    expect(s.summary!.cancelled, isTrue);
+    expect(s.summary!.logSkipped, isFalse);
+    expect(s.summary!.title, 'Descarga cancelada');
+    expect(s.summary!.text, 'Alcanzó a hacer: 3 fotos nuevas, 3 lecturas, sin errores');
+    expect(step(s, SyncStep.log).status, StepStatus.ok);
+  });
+
+  test('cancelar antes de empezar: no procesa log.txt ni /reset_log ni fotos', () async {
+    final esp = FakeEsp32(photoNames(5), log: logV2);
+    final storage = FakeStorage();
+    final s = await run(esp, storage, isCancelled: () => true);
+    expect(esp.calls, isEmpty);
     expect(s.summary!.cancelled, isTrue);
     expect(s.summary!.logSkipped, isTrue);
-    expect(s.summary!.title, 'Descarga cancelada');
-    expect(s.summary!.text, contains('3 fotos nuevas'));
     expect(step(s, SyncStep.log).status, StepStatus.omitido);
+  });
+
+  test('orden: log.txt y /reset_log primero, después las fotos (un lote y continuo)', () async {
+    for (final continuous in [false, true]) {
+      final esp = FakeEsp32(photoNames(25), log: logV2);
+      final s = await run(esp, FakeStorage(), continuous: continuous);
+      expect(esp.calls.take(3), ['log', 'reset', 'list'], reason: 'continuous=$continuous');
+      expect(esp.calls.where((c) => c == 'log').length, 1);
+      expect(s.steps.map((x) => x.step).toList().indexOf(SyncStep.log),
+          lessThan(s.steps.map((x) => x.step).toList().indexOf(SyncStep.fotos)));
+    }
+  });
+
+  test('si el log falla, las fotos se descargan igual', () async {
+    final esp = FakeEsp32(photoNames(4), log: logV2)..failLog = true;
+    final storage = FakeStorage();
+    final s = await run(esp, storage);
+    expect(storage.photos.length, 4);
+    expect(esp.resetCalls, 0);
+    expect(step(s, SyncStep.log).status, StepStatus.error);
+    expect(step(s, SyncStep.log).message, contains('reintentará'));
+    expect(s.summary!.errors, 1);
+    expect(s.summary!.newPhotos, 4);
   });
 
   test('progreso: barra por lote, contador acumulado con "quedan más"', () async {
@@ -284,13 +327,13 @@ void main() {
     expect(s.summary!.fatal, isTrue);
   });
 
-  test('SD que deja de responder a mitad: se detiene y no procesa el log', () async {
+  test('SD que deja de responder al listar: error claro; el log ya se procesó antes', () async {
     // checkStatus dice conectado, pero /list falla después.
     final esp2 = _ListFailsEsp(photoNames(5), log: logV2);
     final s2 = await run(esp2, FakeStorage());
     expect(step(s2, SyncStep.listar).message, contains('SD no responde'));
-    expect(step(s2, SyncStep.log).status, StepStatus.omitido);
-    expect(esp2.logDownloads, 0);
+    expect(step(s2, SyncStep.log).status, StepStatus.ok);
+    expect(esp2.logDownloads, 1);
   });
 
   test('SD ocupada: /list se reintenta', () async {

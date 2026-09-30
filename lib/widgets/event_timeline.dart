@@ -21,8 +21,10 @@ class EventFilterChips extends StatelessWidget {
   final Map<String, int>? counts;
   final ValueChanged<Set<String>> onChanged;
   final bool enabled;
+  final List<String> categories;
 
   const EventFilterChips({
+    this.categories = eventCategories,
     super.key,
     required this.selected,
     required this.onChanged,
@@ -37,7 +39,7 @@ class EventFilterChips extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          for (final c in eventCategories)
+          for (final c in categories)
             Padding(
               padding: const EdgeInsets.only(right: 6),
               child: FilterChip(
@@ -66,12 +68,16 @@ class EventTimeline extends StatelessWidget {
   final String emptyMessage;
   final Future<void> Function()? onRefresh;
 
+  /// Acción al tocar un evento (por defecto, el detalle con sensores).
+  final void Function(BuildContext context, EventRecord event)? onTapEvent;
+
   const EventTimeline({
     super.key,
     required this.days,
     this.header,
     this.emptyMessage = 'Sin eventos.',
     this.onRefresh,
+    this.onTapEvent,
   });
 
   @override
@@ -105,7 +111,9 @@ class EventTimeline extends StatelessWidget {
         return _EventRow(
           event: ev,
           isLastOfDay: next == null || next is EventDay,
-          onTap: () => showEventDetail(context, ev),
+          onTap: () => onTapEvent != null
+              ? onTapEvent!(context, ev)
+              : showEventDetail(context, ev),
         );
       },
     );
@@ -139,13 +147,16 @@ class _DayHeader extends StatelessWidget {
 
 /// Resumen corto de sensores para la fila (temperatura, humedad, PWM, peso).
 String sensorSummary(Map<String, double> sensors) {
-  const keys = ['T1_K', 'H1_K', 'P2_K', 'W1_K'];
+  const keys = ['T1_K', 'H1_K', 'P2_K', 'W1_K', 'L1_K'];
   return [
     for (final k in keys)
       if (sensors.containsKey(k))
-        k == 'P2_K'
-            ? 'PWM ${formatSensorValue(k, sensors[k]).split(' ').first}'
-            : formatSensorValue(k, sensors[k]),
+        switch (k) {
+          'P2_K' => 'PWM ${formatSensorValue(k, sensors[k]).split(' ').first}',
+          // Sí/No solo no se entiende sin la etiqueta.
+          'L1_K' => 'Lluvia: ${formatSensorValue(k, sensors[k])}',
+          _ => formatSensorValue(k, sensors[k]),
+        },
   ].join(' · ');
 }
 
@@ -212,6 +223,11 @@ class _EventRow extends StatelessWidget {
                 ),
               ),
             ),
+            if (event.event == 'BIRD')
+              Padding(
+                padding: const EdgeInsets.only(right: 16),
+                child: Icon(Icons.photo_library_outlined, size: 20, color: style.color),
+              ),
           ],
         ),
       ),

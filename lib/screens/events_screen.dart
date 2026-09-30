@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import '../models/event_record.dart';
+import '../models/gallery_group.dart';
 import '../services/presigner_config.dart';
 import '../services/cloud_gallery_service.dart';
 import '../services/error_messages.dart';
 import '../services/local_storage_service.dart';
 import '../services/sync_run_controller.dart';
 import '../widgets/event_timeline.dart';
+import '../widgets/photo_viewer.dart';
+import 'local_gallery_tab.dart';
 import '../widgets/truncated_notice.dart';
 
 /// Visor de eventos del log (excepto BIRD, que está en la galería):
@@ -85,6 +88,35 @@ class _LocalEventsTabState extends State<_LocalEventsTab>
     }
   }
 
+  /// BIRD → visor de la galería local con las fotos del mismo timestamp exacto.
+  Future<void> _openBirdPhotos(EventRecord ev) async {
+    final photos = ev.timestampValid
+        ? photosForEvent(await _storage.allPhotos(), ev.timestamp)
+        : const <StoredPhoto>[];
+    if (!mounted) return;
+    if (photos.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Las fotos de este evento ya no están en el teléfono: '
+            'ya se subieron a la nube o siguen en la SD.'),
+      ));
+      return;
+    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PhotoViewerScreen(
+          photos: localViewerPhotos(GalleryGroup(
+            timestampRaw: photos.first.timestamp ?? '',
+            timestamp: ev.timestamp,
+            photos: photos,
+            eventType: ev.event,
+            sensors: ev.sensors,
+          )),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -106,10 +138,13 @@ class _LocalEventsTabState extends State<_LocalEventsTab>
           child: EventTimeline(
             days: groupEventsByDay(events, _selected),
             onRefresh: _load,
+            onTapEvent: (ctx, ev) =>
+                ev.event == 'BIRD' ? _openBirdPhotos(ev) : showEventDetail(ctx, ev),
             header: Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
               child: Text(
-                'Eventos descargados que aún no se suben. Al subirlos pasan a la pestaña Cloud.',
+                'Eventos descargados que aún no se suben (al subirlos pasan a la pestaña Cloud). '
+                'Toca un «Ave detectada» para ver sus fotos.',
                 style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
               ),
             ),
@@ -137,7 +172,7 @@ class _CloudEventsTabState extends State<_CloudEventsTab>
   static const _ranges = ['Hoy', '7 días', '30 días'];
 
   int _rangeIdx = 0;
-  Set<String> _selected = eventCategories.toSet();
+  Set<String> _selected = cloudEventCategories.toSet();
   bool _loading = false;
   String? _error;
   String? _errorDetail;
@@ -236,6 +271,7 @@ class _CloudEventsTabState extends State<_CloudEventsTab>
         ),
         const SizedBox(height: 6),
         EventFilterChips(
+          categories: cloudEventCategories,
           selected: _selected,
           enabled: !_loading,
           onChanged: (s) {

@@ -18,13 +18,14 @@ const sensorLabels = {
   'I3_K': 'Corriente Batería',
   'I4_K': 'Corriente filtrada',
   'W1_K': 'Peso del agua',
+  'L1_K': 'Lluvia',
 };
 
 /// Orden en que se muestran los sensores (el del Arduino; las claves antiguas
 /// al final). Claves desconocidas van después de estas.
 const sensorOrder = [
   'T1_K', 'T2_K', 'T3_K', 'T4_K', 'T5_K', 'T6_K',
-  'H1_K', 'H2_K', 'P1_K', 'P2_K', 'I4_K', 'W1_K',
+  'H1_K', 'H2_K', 'P1_K', 'P2_K', 'I4_K', 'W1_K', 'L1_K',
   'E1_K', 'E2_K', 'I1_K', 'I2_K', 'I3_K',
 ];
 
@@ -48,8 +49,16 @@ List<String> orderedSensorKeys(Iterable<String> keys) {
 
 /// Valor legible con unidad, p. ej. "24.5 °C", "0.35 A", "128 / 255 (50 %)".
 /// null o NaN (sensor sin lectura) → "sin lectura".
+/// Sensores booleanos (1.0 = sí, 0.0 = no; último estado, no promedio).
+const booleanSensors = {'L1_K'};
+
+/// true/false para un sensor booleano; null si no hay lectura válida.
+bool? sensorBool(double? value) =>
+    (value == null || value.isNaN || value.isInfinite) ? null : value >= 0.5;
+
 String formatSensorValue(String key, double? value) {
   if (value == null || value.isNaN || value.isInfinite) return 'sin lectura';
+  if (booleanSensors.contains(key)) return value >= 0.5 ? 'Sí' : 'No';
   if (key == 'P2_K') {
     final pwm = value.round();
     return '$pwm / 255 (${(pwm * 100 / 255).round()} %)';

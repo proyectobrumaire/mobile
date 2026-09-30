@@ -24,9 +24,12 @@ class EventRecord {
 /// Categoría de filtro para tipos desconocidos (p. ej. INVALID_EV).
 const otrosEventos = 'OTROS';
 
-/// Categorías del filtro del visor, en orden. BIRD no aparece: las aves ya
-/// están en la galería.
-const eventCategories = ['PERIODIC', 'BOOT', 'PELTIER_ON', 'PELTIER_OFF', 'VOLCADO', otrosEventos];
+/// Categorías del filtro del visor (pestaña Local), en orden. Incluye BIRD:
+/// al tocar un evento de ave se abren sus fotos.
+const eventCategories = ['BIRD', 'PERIODIC', 'BOOT', 'PELTIER_ON', 'PELTIER_OFF', 'VOLCADO', otrosEventos];
+
+/// Categorías de la pestaña Cloud: sin BIRD (las aves están en la galería).
+const cloudEventCategories = ['PERIODIC', 'BOOT', 'PELTIER_ON', 'PELTIER_OFF', 'VOLCADO', otrosEventos];
 
 const _knownLabels = {
   'BOOT': 'Arranque del sistema',
@@ -43,18 +46,21 @@ String eventLabelFor(String event) => _knownLabels[event] ?? 'Evento $event';
 String eventCategory(String event) =>
     eventCategories.contains(event) ? event : otrosEventos;
 
-String categoryLabel(String category) =>
-    category == otrosEventos ? 'Otros' : eventLabelFor(category);
+String categoryLabel(String category) => switch (category) {
+      otrosEventos => 'Otros',
+      'BIRD' => 'Ave',
+      _ => eventLabelFor(category),
+    };
 
 /// Tipos a pedir a POST /events para las categorías elegidas. Se envían
 /// explícitos para que BIRD (muy frecuente) no consuma el límite de 500.
 /// "Otros" solo puede pedir los desconocidos que conocemos (INVALID_EV).
 List<String> cloudTypesFor(Set<String> categories) => [
-      for (final c in eventCategories)
+      for (final c in cloudEventCategories)
         if (categories.contains(c)) ...(c == otrosEventos ? const ['INVALID_EV'] : [c]),
     ];
 
-/// Eventos (excepto BIRD) armados desde filas de log_entries: cada línea de
+/// Eventos (incluido BIRD) armados desde filas de log_entries: cada línea de
 /// evento con las lecturas de sensores del mismo timestamp exacto.
 List<EventRecord> eventsFromLogEntries(List<LogEntry> entries) {
   final sensorsByTs = <DateTime, Map<String, double>>{};
@@ -65,7 +71,7 @@ List<EventRecord> eventsFromLogEntries(List<LogEntry> entries) {
   }
   return [
     for (final e in entries)
-      if (e.type == EntryType.event && e.event != null && e.event != 'BIRD')
+      if (e.type == EntryType.event && e.event != null)
         EventRecord(
           timestamp: e.timestamp,
           event: e.event!,
@@ -82,11 +88,11 @@ class EventDay {
   const EventDay(this.date, this.events);
 }
 
-/// Filtra por categoría (BIRD siempre fuera) y agrupa por día, lo más
-/// reciente primero; los de fecha inválida al final.
+/// Filtra por categoría y agrupa por día, lo más reciente primero; los de
+/// fecha inválida al final. (La pestaña Cloud no incluye la categoría BIRD.)
 List<EventDay> groupEventsByDay(List<EventRecord> events, Set<String> categories) {
   final filtered = events
-      .where((e) => e.event != 'BIRD' && categories.contains(e.category))
+      .where((e) => categories.contains(e.category))
       .toList()
     ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
   final byDay = <DateTime?, List<EventRecord>>{};
@@ -108,7 +114,6 @@ List<EventDay> groupEventsByDay(List<EventRecord> events, Set<String> categories
 Map<String, int> countByCategory(List<EventRecord> events) {
   final m = <String, int>{};
   for (final e in events) {
-    if (e.event == 'BIRD') continue;
     m[e.category] = (m[e.category] ?? 0) + 1;
   }
   return m;

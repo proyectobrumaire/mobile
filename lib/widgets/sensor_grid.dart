@@ -34,12 +34,29 @@ class SensorGrid extends StatelessWidget {
                     sensorLabels[k] ?? k,
                     style: theme.labelSmall?.copyWith(color: labelColor ?? Colors.grey.shade600),
                   ),
-                  Text(
-                    formatSensorValue(k, sensors[k]),
-                    style: theme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: valueColor,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (booleanSensors.contains(k) && sensorBool(sensors[k]) != null) ...[
+                        Icon(
+                          sensorBool(sensors[k])! ? Icons.water_drop : Icons.water_drop_outlined,
+                          size: 16,
+                          color: sensorBool(sensors[k])!
+                              ? Colors.lightBlue.shade400
+                              : (labelColor ?? Colors.grey.shade500),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      Flexible(
+                        child: Text(
+                          formatSensorValue(k, sensors[k]),
+                          style: theme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: valueColor,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

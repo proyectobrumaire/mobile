@@ -18,6 +18,22 @@ String eventLabel(String? event) => switch (event) {
       _ => event,
     };
 
+/// Fotos locales de un evento listas para el visor (una por foto del grupo).
+List<ViewerPhoto> localViewerPhotos(GalleryGroup g) => [
+      for (var i = 0; i < g.photos.length; i++)
+        ViewerPhoto(
+          image: FileImage(File(g.photos[i].localPath)),
+          title: g.timestamp != null
+              ? '${formatDayHeader(g.timestamp!)} · ${formatTime(g.timestamp!)}'
+              : g.photos[i].filename,
+          subtitle: '${eventLabel(g.eventType)} · foto ${i + 1} de ${g.photos.length}',
+          status: g.photos[i].uploaded
+              ? (text: 'Ya subida', color: Colors.green.shade400, icon: Icons.cloud_done)
+              : (text: 'Pendiente de subir', color: Colors.orange.shade300, icon: Icons.cloud_upload_outlined),
+          sensors: g.sensors,
+        ),
+    ];
+
 /// Pestaña Local: fotos que están en el teléfono (pendientes de subir), por
 /// día y evento, con subida al servidor y borrado manual.
 class LocalGalleryTab extends StatefulWidget {
@@ -187,21 +203,8 @@ class _LocalGalleryTabState extends State<LocalGalleryTab>
     final items = <ViewerPhoto>[];
     for (final d in _days!) {
       for (final g in d.groups) {
-        for (var i = 0; i < g.photos.length; i++) {
-          final p = g.photos[i];
-          photos.add(p);
-          items.add(ViewerPhoto(
-            image: FileImage(File(p.localPath)),
-            title: g.timestamp != null
-                ? '${formatDayHeader(g.timestamp!)} · ${formatTime(g.timestamp!)}'
-                : p.filename,
-            subtitle: '${eventLabel(g.eventType)} · foto ${i + 1} de ${g.photos.length}',
-            status: p.uploaded
-                ? (text: 'Ya subida', color: Colors.green.shade400, icon: Icons.cloud_done)
-                : (text: 'Pendiente de subir', color: Colors.orange.shade300, icon: Icons.cloud_upload_outlined),
-            sensors: g.sensors,
-          ));
-        }
+        photos.addAll(g.photos);
+        items.addAll(localViewerPhotos(g));
       }
     }
     final index = photos.indexWhere((p) => p.id == photo.id);

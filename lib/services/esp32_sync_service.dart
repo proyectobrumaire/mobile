@@ -83,14 +83,14 @@ class Esp32SyncService {
     if (health.status == Esp32Status.sdNoResponde) {
       // El ESP32 responde pero la SD no: no hay nada que descargar y el log
       // tampoco se puede leer.
+      yield const SyncProgress(SyncStep.log, StepStatus.omitido,
+          'No se procesó porque la SD no responde.');
       yield SyncProgress(
         SyncStep.listar,
         StepStatus.error,
         ErrorMessages.esp32(const Esp32HttpException('GET /list', 500, 'Failed to open Dir')),
         technical: health.technical,
       );
-      yield const SyncProgress(SyncStep.log, StepStatus.omitido,
-          'No se procesó porque la SD no responde.');
       yield SyncProgress.done(
         const SyncSummary(kind: SyncKind.descarga, errors: 1, fatal: true, logSkipped: true),
       );
@@ -114,6 +114,77 @@ class Esp32SyncService {
       );
     }
 
+    // ── log.txt (primero, antes de las fotos) ──
+    // Así, si se cancela o falla algo durante las fotos, las lecturas ya
+    // quedaron guardadas. Si el log falla, las fotos se descargan igual y el
+    // log se reintenta la próxima vez.
+    // Se pide directo y no se busca en /list: /list devuelve máx. 20 archivos
+    // y log.txt puede quedar fuera si hay muchas fotos en la SD.
+    int newLines = 0;
+    bool logSkipped = false;
+    bool cancelled = false;
+    if (cancelRequested()) {
+      cancelled = true;
+      logSkipped = true;
+      yield const SyncProgress(SyncStep.log, StepStatus.omitido,
+          'No se procesó porque cancelaste; queda en la SD para la próxima vez.');
+    } else {
+      yield const SyncProgress(SyncStep.log, StepStatus.enCurso,
+          'Descargando el registro de sensores (log.txt)…');
+      try {
+        final bytes = await esp32.tryDownloadFile('log.txt');
+        if (bytes == null) {
+          yield const SyncProgress(SyncStep.log, StepStatus.ok,
+              'No hay lecturas nuevas (la SD no tiene log.txt).');
+        } else {
+          final content = String.fromCharCodes(bytes);
+          final all = LogParser.parse(content);
+          final maxSeq = await storage.maxStoredSeq();
+          final newEntries =
+              all.where((e) => e.seq == null || e.seq! > maxSeq).toList();
+          final invalidCount = newEntries.where((e) => !e.timestampValid).length;
+
+          newLines = await storage.insertLogEntries(newEntries);
+
+          // /reset_log solo después de guardar en SQLite (en una transacción).
+          String? resetError;
+          try {
+            await esp32.resetLog();
+          } catch (e) {
+            resetError = '$e';
+          }
+
+          final notes = <String>[
+            '${plural(newLines, 'lectura nueva guardada', 'lecturas nuevas guardadas')}.',
+            if (invalidCount > 0)
+              '$invalidCount con fecha inválida (se guardaron igual).',
+            if (resetError != null)
+              'No se pudo vaciar el log en la estación; no se pierde nada, '
+                  'las repetidas se ignoran la próxima vez.',
+          ];
+          final warn = invalidCount > 0 || resetError != null;
+          if (warn) warnings++;
+          yield SyncProgress(
+            SyncStep.log,
+            warn ? StepStatus.advertencia : StepStatus.ok,
+            notes.join(' '),
+            technical: resetError != null ? 'POST /reset_log → $resetError' : null,
+          );
+        }
+      } catch (e) {
+        errors++;
+        logSkipped = true;
+        yield SyncProgress(
+          SyncStep.log,
+          StepStatus.error,
+          'No se pudo descargar el registro de sensores. ${ErrorMessages.esp32(e)} '
+          'Las fotos se descargan igual; el log se reintentará la próxima vez.',
+          technical: '$e',
+        );
+      }
+    }
+
+
     // ── Fotos, por lotes ──
     // No se conoce el total de la SD (/list da máx. 20 y `truncated`): la barra
     // determinada es solo del lote actual; el acumulado va como contador.
@@ -126,7 +197,6 @@ class Esp32SyncService {
     bool stoppedNoProgress = false;
     bool listFailed = false;
     bool sdFailed = false;
-    bool cancelled = false;
 
     String overallText(bool more) {
       final done = plural(newPhotos + repeatedPhotos, 'foto descargada', 'fotos descargadas');
@@ -279,75 +349,6 @@ class Esp32SyncService {
         ].join(' '),
         overall: '${overallText(remaining)}.',
       );
-    }
-
-    // ── log.txt ──
-    // Se pide directo y no se busca en /list: /list devuelve máx. 20 archivos
-    // y log.txt puede quedar fuera si hay muchas fotos en la SD.
-    int newLines = 0;
-    bool logSkipped = false;
-    if (cancelled || cancelRequested()) {
-      cancelled = true;
-      logSkipped = true;
-      yield const SyncProgress(SyncStep.log, StepStatus.omitido,
-          'No se procesó porque cancelaste; queda en la SD para la próxima vez.');
-    } else if (sdFailed) {
-      logSkipped = true;
-      yield const SyncProgress(SyncStep.log, StepStatus.omitido,
-          'No se procesó porque la SD no responde.');
-    } else {
-      yield const SyncProgress(SyncStep.log, StepStatus.enCurso,
-          'Descargando el registro de sensores (log.txt)…');
-      try {
-        final bytes = await esp32.tryDownloadFile('log.txt');
-        if (bytes == null) {
-          yield const SyncProgress(SyncStep.log, StepStatus.ok,
-              'No hay lecturas nuevas (la SD no tiene log.txt).');
-        } else {
-          final content = String.fromCharCodes(bytes);
-          final all = LogParser.parse(content);
-          final maxSeq = await storage.maxStoredSeq();
-          final newEntries =
-              all.where((e) => e.seq == null || e.seq! > maxSeq).toList();
-          final invalidCount = newEntries.where((e) => !e.timestampValid).length;
-
-          newLines = await storage.insertLogEntries(newEntries);
-
-          // /reset_log solo después de guardar en SQLite (en una transacción).
-          String? resetError;
-          try {
-            await esp32.resetLog();
-          } catch (e) {
-            resetError = '$e';
-          }
-
-          final notes = <String>[
-            '${plural(newLines, 'lectura nueva guardada', 'lecturas nuevas guardadas')}.',
-            if (invalidCount > 0)
-              '$invalidCount con fecha inválida (se guardaron igual).',
-            if (resetError != null)
-              'No se pudo vaciar el log en la estación; no se pierde nada, '
-                  'las repetidas se ignoran la próxima vez.',
-          ];
-          final warn = invalidCount > 0 || resetError != null;
-          if (warn) warnings++;
-          yield SyncProgress(
-            SyncStep.log,
-            warn ? StepStatus.advertencia : StepStatus.ok,
-            notes.join(' '),
-            technical: resetError != null ? 'POST /reset_log → $resetError' : null,
-          );
-        }
-      } catch (e) {
-        errors++;
-        logSkipped = true;
-        yield SyncProgress(
-          SyncStep.log,
-          StepStatus.error,
-          'No se pudo descargar el registro de sensores. ${ErrorMessages.esp32(e)}',
-          technical: '$e',
-        );
-      }
     }
 
     await prefs.setString(_keyAt, DateTime.now().toIso8601String());

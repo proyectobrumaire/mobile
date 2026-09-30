@@ -129,12 +129,11 @@ class LocalStorageService {
     }
   }
 
-  /// Líneas de evento pendientes de subir (excepto BIRD) y las lecturas de
+  /// Líneas de evento pendientes de subir (incluido BIRD) y las lecturas de
   /// sensores de esos mismos timestamps (para el visor de eventos Local).
   Future<List<LogEntry>> pendingEventEntries() async {
     final db = await _database;
-    const eventWhere =
-        "etype='event' AND uploaded=0 AND (event IS NULL OR event != 'BIRD')";
+    const eventWhere = "etype='event' AND uploaded=0";
     final events = await db.query('log_entries', where: eventWhere, orderBy: 'seq ASC');
     final sensors = await db.rawQuery(
       "SELECT * FROM log_entries WHERE etype='sensorData' AND ts_valid=1 "

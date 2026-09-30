@@ -38,6 +38,11 @@ class GalleryDay {
 DateTime? photoDateTime(StoredPhoto p) =>
     p.timestamp == null ? null : LogParser.parseTimestamp(p.timestamp!);
 
+/// Fotos del evento con ese timestamp exacto (`image_<ts>_0/1/2`), en orden.
+List<StoredPhoto> photosForEvent(List<StoredPhoto> photos, DateTime timestamp) =>
+    photos.where((p) => photoDateTime(p) == timestamp).toList()
+      ..sort((a, b) => a.filename.compareTo(b.filename));
+
 /// Agrupa fotos por evento (timestamp) y los eventos por día.
 /// Días y eventos de más reciente a más antiguo; "sin fecha" al final.
 /// `entries` son las entradas de log (se cruzan por timestamp exacto).
