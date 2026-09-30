@@ -23,11 +23,49 @@ class BackendSyncService {
     final legacy = await storage.uploadedPhotos();
     await storage.deletePhotos(legacy);
 
-    // ── Fotos ──
+    // ── Log (primero) ──
+    // Un solo JSON liviano: así las lecturas y eventos llegan aunque fallen
+    // fotos o se cancele a mitad. Si falla, las fotos se suben igual.
+    if (cancelRequested()) {
+      cancelled = true;
+      yield const SyncProgress(SyncStep.subirLog, StepStatus.omitido,
+          'No se subieron porque cancelaste; quedan pendientes.');
+    } else {
+      final entries = await storage.pendingLogEntries();
+      if (entries.isEmpty) {
+        yield const SyncProgress(SyncStep.subirLog, StepStatus.ok,
+            'No hay lecturas pendientes.');
+      } else {
+        yield SyncProgress(SyncStep.subirLog, StepStatus.enCurso,
+            'Subiendo ${plural(entries.length, 'lectura', 'lecturas')}…');
+        try {
+          await backend.uploadLogs(entries.map((e) => e.entry).toList());
+          await storage.markLogEntriesUploaded(entries.map((e) => e.id).toList());
+          uploadedLines = entries.length;
+          yield SyncProgress(SyncStep.subirLog, StepStatus.ok,
+              '${plural(uploadedLines, 'lectura subida', 'lecturas subidas')}. Se borran del '
+              'teléfono al terminar, salvo las de fotos aún pendientes.');
+        } catch (e) {
+          errors++;
+          yield SyncProgress(
+            SyncStep.subirLog,
+            StepStatus.error,
+            'No se pudieron subir las lecturas. ${ErrorMessages.backend(e)} '
+            'Las fotos se suben igual; las lecturas quedan pendientes para la próxima vez.',
+            technical: '$e',
+          );
+        }
+      }
+    }
+
+    // ── Fotos (después del log) ──
     // Cada foto se borra del teléfono (archivo y fila) apenas S3 confirma la
     // subida. Sus lecturas se borran al final, cuando también estén subidas.
-    final photos = await storage.pendingPhotos();
-    if (photos.isEmpty) {
+    final photos = cancelled ? const <StoredPhoto>[] : await storage.pendingPhotos();
+    if (cancelled) {
+      yield const SyncProgress(SyncStep.subirFotos, StepStatus.omitido,
+          'No se subieron porque cancelaste; quedan pendientes.');
+    } else if (photos.isEmpty) {
       yield const SyncProgress(SyncStep.subirFotos, StepStatus.ok,
           'No hay fotos pendientes.');
     } else {
@@ -85,37 +123,6 @@ class BackendSyncService {
         current: attempted,
         total: photos.length,
       );
-    }
-
-    // ── Log ──
-    if (cancelled) {
-      yield const SyncProgress(SyncStep.subirLog, StepStatus.omitido,
-          'No se subieron porque cancelaste; quedan pendientes.');
-    } else {
-      final entries = await storage.pendingLogEntries();
-      if (entries.isEmpty) {
-        yield const SyncProgress(SyncStep.subirLog, StepStatus.ok,
-            'No hay lecturas pendientes.');
-      } else {
-        yield SyncProgress(SyncStep.subirLog, StepStatus.enCurso,
-            'Subiendo ${plural(entries.length, 'lectura', 'lecturas')}…');
-        try {
-          await backend.uploadLogs(entries.map((e) => e.entry).toList());
-          await storage.markLogEntriesUploaded(entries.map((e) => e.id).toList());
-          uploadedLines = entries.length;
-          yield SyncProgress(SyncStep.subirLog, StepStatus.ok,
-              '${plural(uploadedLines, 'lectura subida', 'lecturas subidas')} y borradas del teléfono '
-              '(salvo las de fotos aún pendientes).');
-        } catch (e) {
-          errors++;
-          yield SyncProgress(
-            SyncStep.subirLog,
-            StepStatus.error,
-            'No se pudieron subir las lecturas. ${ErrorMessages.backend(e)}',
-            technical: '$e',
-          );
-        }
-      }
     }
 
     // Lecturas ya subidas: se borran del teléfono salvo las de fotos que

@@ -11,8 +11,8 @@ enum SyncStep {
   log('Procesar el log de sensores'),
   listar('Revisar la SD'),
   fotos('Descargar fotos'),
+  subirLog('Subir lecturas y eventos'),
   subirFotos('Subir fotos'),
-  subirLog('Subir lecturas de sensores'),
   resumen('Resumen');
 
   final String titulo;
@@ -87,8 +87,8 @@ class SyncSummary {
       }
       parts.add(logSkipped ? 'log no procesado' : plural(newLines, 'lectura', 'lecturas'));
     } else {
-      parts.add(plural(uploadedPhotos, 'foto subida', 'fotos subidas'));
       parts.add(plural(uploadedLines, 'lectura subida', 'lecturas subidas'));
+      parts.add(plural(uploadedPhotos, 'foto subida', 'fotos subidas'));
       if (purgedPhotos > 0) {
         parts.add('${plural(purgedPhotos, 'foto ya subida borrada', 'fotos ya subidas borradas')} del teléfono');
       }

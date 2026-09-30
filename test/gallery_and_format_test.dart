@@ -141,7 +141,7 @@ void main() {
     test('resumen de subida y de cancelación', () {
       expect(
         const SyncSummary(kind: SyncKind.subida, uploadedPhotos: 1, uploadedLines: 3).text,
-        '1 foto subida, 3 lecturas subidas, sin errores',
+        '3 lecturas subidas, 1 foto subida, sin errores',
       );
       const c = SyncSummary(kind: SyncKind.descarga, newPhotos: 3, cancelled: true, logSkipped: true);
       expect(c.title, 'Descarga cancelada');
