@@ -11,7 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   testWidgets('SyncProgressView: pasos, barra de lote, problemas y detalle oculto',
       (tester) async {
-    final state = SyncRunState(SyncKind.descarga)
+    final state = SyncRunState(SyncKind.descargaFotos)
       ..apply(const SyncProgress(SyncStep.conectar, StepStatus.ok, 'Conectado.'))
       ..apply(const SyncProgress(
         SyncStep.fotos,
@@ -42,13 +42,13 @@ void main() {
 
     state
       ..apply(SyncProgress.done(const SyncSummary(
-          kind: SyncKind.descarga, newPhotos: 12, newLines: 240, errors: 1)))
+          kind: SyncKind.descargaFotos, newPhotos: 12, errors: 1)))
       ..running = false;
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(body: SingleChildScrollView(child: SyncProgressView(state: state))),
     ));
-    expect(find.text('Descarga terminada con errores'), findsOneWidget);
-    expect(find.text('12 fotos nuevas, 240 lecturas, 1 error'), findsOneWidget);
+    expect(find.text('Descarga de fotos terminada con errores'), findsOneWidget);
+    expect(find.text('12 fotos nuevas, 1 error'), findsOneWidget);
   });
 
   testWidgets('PhotoViewerScreen: muestra sensores con etiquetas y unidades', (tester) async {
@@ -75,12 +75,14 @@ void main() {
     expect(find.text('Pendiente de subir'), findsOneWidget);
   });
 
-  testWidgets('Descargar SD abre el diálogo con «Descarga continua» recordada',
+  testWidgets('Dos botones; «Descargar fotos» abre el diálogo con «Descarga continua» recordada',
       (tester) async {
     SharedPreferences.setMockInitialValues({'esp32_continuous_download': true});
     await tester.pumpWidget(const BrumaireApp());
     await tester.pump();
-    await tester.tap(find.text('Descargar SD'));
+    expect(find.text('Descargar log'), findsOneWidget);
+    expect(find.text('Descargar SD'), findsNothing);
+    await tester.tap(find.text('Descargar fotos'));
     await tester.pumpAndSettle();
     expect(find.text('Descarga continua'), findsOneWidget);
     final sw = tester.widget<SwitchListTile>(find.byType(SwitchListTile));

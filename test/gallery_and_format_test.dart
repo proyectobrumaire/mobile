@@ -124,18 +124,20 @@ void main() {
 
   group('SyncRunState / SyncSummary', () {
     test('acumula pasos e incidencias; el resumen es legible', () {
-      final s = SyncRunState(SyncKind.descarga)
+      final s = SyncRunState(SyncKind.descargaFotos)
         ..apply(const SyncProgress(SyncStep.conectar, StepStatus.enCurso, 'a'))
         ..apply(const SyncProgress(SyncStep.conectar, StepStatus.ok, 'b'))
         ..apply(const SyncProgress(SyncStep.fotos, StepStatus.enCurso, 'c',
             current: 1, total: 4, issue: SyncIssue('x')))
         ..apply(const SyncProgress(SyncStep.fotos, StepStatus.ok, 'd', current: 4, total: 4))
         ..apply(SyncProgress.done(const SyncSummary(
-            kind: SyncKind.descarga, newPhotos: 12, newLines: 240, errors: 1)));
+            kind: SyncKind.descargaFotos, newPhotos: 12, errors: 1)));
       expect(s.steps.map((x) => x.step), [SyncStep.conectar, SyncStep.fotos]);
       expect(s.steps.last.issues.length, 1);
       expect(s.steps.last.fraction, 1.0);
-      expect(s.summary!.text, '12 fotos nuevas, 240 lecturas, 1 error');
+      expect(s.summary!.text, '12 fotos nuevas, 1 error');
+      expect(const SyncSummary(kind: SyncKind.descargaLog, newLines: 240).text,
+          '240 lecturas nuevas, sin errores');
     });
 
     test('resumen de subida y de cancelación', () {
@@ -143,9 +145,12 @@ void main() {
         const SyncSummary(kind: SyncKind.subida, uploadedPhotos: 1, uploadedLines: 3).text,
         '3 lecturas subidas, 1 foto subida, sin errores',
       );
-      const c = SyncSummary(kind: SyncKind.descarga, newPhotos: 3, cancelled: true, logSkipped: true);
-      expect(c.title, 'Descarga cancelada');
-      expect(c.text, 'Alcanzó a hacer: 3 fotos nuevas, log no procesado, sin errores');
+      const c = SyncSummary(kind: SyncKind.descargaFotos, newPhotos: 3, cancelled: true);
+      expect(c.title, 'Descarga de fotos cancelada');
+      expect(c.text, 'Alcanzó a hacer: 3 fotos nuevas, sin errores');
+      const l = SyncSummary(kind: SyncKind.descargaLog, cancelled: true, logSkipped: true);
+      expect(l.title, 'Descarga del log cancelada');
+      expect(l.text, 'Alcanzó a hacer: log no procesado, sin errores');
     });
   });
 

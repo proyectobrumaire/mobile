@@ -2,7 +2,20 @@
 // (Esp32SyncService y BackendSyncService) y el estado que arma la UI con ellos.
 
 /// Qué sincronización se está ejecutando.
-enum SyncKind { descarga, subida }
+enum SyncKind {
+  descargaLog,
+  descargaFotos,
+  subida;
+
+  bool get isDescarga => this != subida;
+
+  /// Para títulos: "Descarga del log", "Descarga de fotos", "Subida".
+  String get nombre => switch (this) {
+        descargaLog => 'Descarga del log',
+        descargaFotos => 'Descarga de fotos',
+        subida => 'Subida',
+      };
+}
 
 /// Pasos posibles de una sincronización, en el orden en que se muestran.
 enum SyncStep {
@@ -70,7 +83,7 @@ class SyncSummary {
 
   /// Título corto del resultado.
   String get title {
-    final what = kind == SyncKind.descarga ? 'Descarga' : 'Subida';
+    final what = kind.nombre;
     if (fatal) return '$what fallida';
     if (cancelled) return '$what cancelada';
     if (errors > 0) return '$what terminada con errores';
@@ -80,12 +93,13 @@ class SyncSummary {
   /// Texto corto, p. ej. "12 fotos nuevas, 240 lecturas, 1 error".
   String get text {
     final parts = <String>[];
-    if (kind == SyncKind.descarga) {
+    if (kind == SyncKind.descargaFotos) {
       parts.add(plural(newPhotos, 'foto nueva', 'fotos nuevas'));
       if (repeatedPhotos > 0) {
         parts.add(plural(repeatedPhotos, 'repetida', 'repetidas'));
       }
-      parts.add(logSkipped ? 'log no procesado' : plural(newLines, 'lectura', 'lecturas'));
+    } else if (kind == SyncKind.descargaLog) {
+      parts.add(logSkipped ? 'log no procesado' : plural(newLines, 'lectura nueva', 'lecturas nuevas'));
     } else {
       parts.add(plural(uploadedLines, 'lectura subida', 'lecturas subidas'));
       parts.add(plural(uploadedPhotos, 'foto subida', 'fotos subidas'));

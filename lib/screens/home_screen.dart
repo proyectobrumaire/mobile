@@ -126,8 +126,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _checkConnection();
   }
 
-  /// Pregunta el modo (un lote o continua) y arranca la descarga.
-  Future<void> _startEsp32Sync() async {
+  /// "Descargar log": hora + log.txt + /reset_log (sin fotos).
+  void _startLogSync() {
+    final esp32 = _makeEsp32Service();
+    _sync.start(
+      SyncKind.descargaLog,
+      (isCancelled) => Esp32SyncService(esp32, _storage).syncLog(isCancelled: isCancelled),
+    );
+  }
+
+  /// "Descargar fotos": pregunta el modo (un lote o continua) y arranca.
+  Future<void> _startPhotoSync() async {
     var continuous = await Esp32SyncService.loadContinuousPref();
     if (!mounted) return;
     final start = await showDialog<bool>(
@@ -135,14 +144,15 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialog) => AlertDialog(
           icon: const Icon(Icons.sd_card_outlined),
-          title: const Text('Descargar SD'),
+          title: const Text('Descargar fotos'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Se descargan las fotos y el registro de sensores. Cada foto se '
-                'borra de la SD cuando ya quedó guardada en el teléfono.',
+                'Se descargan las fotos de la SD. Cada foto se borra de la SD '
+                'cuando ya quedó guardada en el teléfono. (El registro de sensores '
+                'se descarga con «Descargar log».)',
               ),
               const SizedBox(height: 12),
               SwitchListTile(
@@ -172,9 +182,9 @@ class _HomeScreenState extends State<HomeScreen> {
     await Esp32SyncService.saveContinuousPref(continuous);
     final esp32 = _makeEsp32Service();
     _sync.start(
-      SyncKind.descarga,
+      SyncKind.descargaFotos,
       (isCancelled) => Esp32SyncService(esp32, _storage)
-          .sync(continuous: continuous, isCancelled: isCancelled),
+          .syncPhotos(continuous: continuous, isCancelled: isCancelled),
     );
   }
 
@@ -329,7 +339,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final state = _sync.state;
-    final downloading = _sync.running && state?.kind == SyncKind.descarga;
+    final downloading = _sync.running && (state?.kind.isDescarga ?? false);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Brumaire'),
@@ -379,13 +389,13 @@ class _HomeScreenState extends State<HomeScreen> {
             host: _esp32Host,
             onCheck: _checkConnection,
           ),
-          _StatsCard(lastSync: _lastSync, pending: _pending, onTapPending: _openGallery),
+          // Acciones con el ESP32 (sección de conexión): dos descargas separadas.
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: SizedBox(
-              width: double.infinity,
-              child: downloading
-                  ? OutlinedButton.icon(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: downloading
+                ? SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
                       onPressed: _sync.cancelRequested ? null : _sync.cancel,
                       icon: const Icon(Icons.stop_circle_outlined),
                       label: Text(_sync.cancelRequested
@@ -394,13 +404,31 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Theme.of(context).colorScheme.error,
                       ),
-                    )
-                  : FilledButton.icon(
-                      onPressed: _sync.running ? null : _startEsp32Sync,
-                      icon: const Icon(Icons.download_rounded),
-                      label: const Text('Descargar SD'),
                     ),
-            ),
+                  )
+                : Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          onPressed: _sync.running ? null : _startLogSync,
+                          icon: const Icon(Icons.description_outlined),
+                          label: const Text('Descargar log', textAlign: TextAlign.center),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: _sync.running ? null : _startPhotoSync,
+                          icon: const Icon(Icons.photo_camera_outlined),
+                          label: const Text('Descargar fotos', textAlign: TextAlign.center),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _StatsCard(lastSync: _lastSync, pending: _pending, onTapPending: _openGallery),
           ),
           const Divider(height: 1),
           Expanded(

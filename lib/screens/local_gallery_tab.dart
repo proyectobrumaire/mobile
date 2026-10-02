@@ -251,7 +251,7 @@ class _LocalGalleryTabState extends State<LocalGalleryTab>
     final lines = _pending?.logLines ?? 0;
     final nothing = photos == 0 && lines == 0;
     final busy = _sync.running;
-    final downloading = busy && _sync.state?.kind == SyncKind.descarga;
+    final downloading = busy && (_sync.state?.kind.isDescarga ?? false);
     final parts = [
       if (photos > 0) '$photos ${photos == 1 ? 'foto' : 'fotos'}',
       if (lines > 0) '$lines ${lines == 1 ? 'lectura' : 'lecturas'}',

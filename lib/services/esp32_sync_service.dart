@@ -32,19 +32,30 @@ class Esp32SyncService {
   static const _keyLines  = 'esp32_sync_lines';
   static const keyContinuous = 'esp32_continuous_download';
 
-  /// Descarga la SD del ESP32.
+  /// "Descargar log": hora (/set_time) → log.txt (404 = sin log) → parseo e
+  /// insert con el high-water mark de seq → /reset_log. Nada de fotos.
+  Stream<SyncProgress> syncLog({bool Function()? isCancelled}) =>
+      _run(SyncKind.descargaLog, isCancelled: isCancelled);
+
+  /// "Descargar fotos": hora (/set_time) → listar → descargar y borrar fotos.
+  /// Nada de log.
   ///
   /// - `continuous == false`: procesa solo el lote que devuelve /list (máx. 20).
   /// - `continuous == true`: repite listar → descargar → borrar mientras /list
   ///   devuelva `truncated: true`. Se detiene si un lote no logra sacar ninguna
   ///   foto de la SD (evita un bucle infinito).
   ///
-  /// log.txt se descarga directo (no depende de /list) una sola vez al final.
   /// `isCancelled` se consulta entre fotos para poder detener la descarga.
-  Stream<SyncProgress> sync({
+  Stream<SyncProgress> syncPhotos({bool continuous = false, bool Function()? isCancelled}) =>
+      _run(SyncKind.descargaFotos, continuous: continuous, isCancelled: isCancelled);
+
+  /// Flujo común: conexión y hora, y luego el log o las fotos según `kind`.
+  Stream<SyncProgress> _run(
+    SyncKind kind, {
     bool continuous = false,
     bool Function()? isCancelled,
   }) async* {
+    final doLog = kind == SyncKind.descargaLog;
     final cancelRequested = isCancelled ?? () => false;
     final prefs = await SharedPreferences.getInstance();
     int errors = 0;
@@ -63,7 +74,7 @@ class Esp32SyncService {
         technical: health.technical,
       );
       yield SyncProgress.done(
-        const SyncSummary(kind: SyncKind.descarga, errors: 1, fatal: true, logSkipped: true),
+        SyncSummary(kind: kind, errors: 1, fatal: true, logSkipped: doLog),
       );
       return;
     }
@@ -75,24 +86,21 @@ class Esp32SyncService {
         technical: health.technical,
       );
       yield SyncProgress.done(
-        const SyncSummary(kind: SyncKind.descarga, errors: 1, fatal: true, logSkipped: true),
+        SyncSummary(kind: kind, errors: 1, fatal: true, logSkipped: doLog),
       );
       return;
     }
     yield SyncProgress(SyncStep.conectar, StepStatus.ok, 'Conectado a ${esp32.staHost}.');
     if (health.status == Esp32Status.sdNoResponde) {
-      // El ESP32 responde pero la SD no: no hay nada que descargar y el log
-      // tampoco se puede leer.
-      yield const SyncProgress(SyncStep.log, StepStatus.omitido,
-          'No se procesó porque la SD no responde.');
+      // El ESP32 responde pero la SD no: no hay log ni fotos que leer.
       yield SyncProgress(
-        SyncStep.listar,
+        doLog ? SyncStep.log : SyncStep.listar,
         StepStatus.error,
         ErrorMessages.esp32(const Esp32HttpException('GET /list', 500, 'Failed to open Dir')),
         technical: health.technical,
       );
       yield SyncProgress.done(
-        const SyncSummary(kind: SyncKind.descarga, errors: 1, fatal: true, logSkipped: true),
+        SyncSummary(kind: kind, errors: 1, fatal: true, logSkipped: doLog),
       );
       return;
     }
@@ -109,26 +117,26 @@ class Esp32SyncService {
       yield SyncProgress(
         SyncStep.hora,
         StepStatus.advertencia,
-        'No se pudo ajustar la hora de la estación. Las fotos se descargan igual.',
+        'No se pudo ajustar la hora de la estación. La descarga sigue igual.',
         technical: '$e',
       );
     }
 
-    // ── log.txt (primero, antes de las fotos) ──
-    // Así, si se cancela o falla algo durante las fotos, las lecturas ya
-    // quedaron guardadas. Si el log falla, las fotos se descargan igual y el
-    // log se reintenta la próxima vez.
-    // Se pide directo y no se busca en /list: /list devuelve máx. 20 archivos
-    // y log.txt puede quedar fuera si hay muchas fotos en la SD.
     int newLines = 0;
     bool logSkipped = false;
     bool cancelled = false;
-    if (cancelRequested()) {
+    int newPhotos = 0;
+    int repeatedPhotos = 0;
+
+    // ── log.txt (solo "Descargar log") ──
+    // Se pide directo y no se busca en /list: /list devuelve máx. 20 archivos
+    // y log.txt puede quedar fuera si hay muchas fotos en la SD.
+    if (doLog && cancelRequested()) {
       cancelled = true;
       logSkipped = true;
       yield const SyncProgress(SyncStep.log, StepStatus.omitido,
           'No se procesó porque cancelaste; queda en la SD para la próxima vez.');
-    } else {
+    } else if (doLog) {
       yield const SyncProgress(SyncStep.log, StepStatus.enCurso,
           'Descargando el registro de sensores (log.txt)…');
       try {
@@ -178,185 +186,189 @@ class Esp32SyncService {
           SyncStep.log,
           StepStatus.error,
           'No se pudo descargar el registro de sensores. ${ErrorMessages.esp32(e)} '
-          'Las fotos se descargan igual; el log se reintentará la próxima vez.',
+          'El log sigue en la SD; vuelve a intentarlo.',
           technical: '$e',
         );
       }
     }
 
 
-    // ── Fotos, por lotes ──
-    // No se conoce el total de la SD (/list da máx. 20 y `truncated`): la barra
-    // determinada es solo del lote actual; el acumulado va como contador.
-    int batch = 0;
-    int newPhotos = 0;
-    int repeatedPhotos = 0;
-    int totalSeen = 0;     // fotos listadas en todos los lotes
-    final failed = <String>{};
-    bool sdHasMore = false;
-    bool stoppedNoProgress = false;
-    bool listFailed = false;
-    bool sdFailed = false;
+    // ── Fotos, por lotes (solo "Descargar fotos") ──
+    if (!doLog) {
+      // No se conoce el total de la SD (/list da máx. 20 y `truncated`): la barra
+      // determinada es solo del lote actual; el acumulado va como contador.
+      int batch = 0;
+      int totalSeen = 0;     // fotos listadas en todos los lotes
+      final failed = <String>{};
+      bool sdHasMore = false;
+      bool stoppedNoProgress = false;
+      bool listFailed = false;
+      bool sdFailed = false;
 
-    String overallText(bool more) {
-      final done = plural(newPhotos + repeatedPhotos, 'foto descargada', 'fotos descargadas');
-      return more ? '$done, quedan más en la SD' : done;
-    }
-
-    while (true) {
-      if (cancelRequested()) {
-        cancelled = true;
-        break;
-      }
-      batch++;
-      final prefix = continuous ? 'Lote $batch: ' : '';
-      yield SyncProgress(SyncStep.listar, StepStatus.enCurso,
-          '${prefix}leyendo la lista de archivos…');
-
-      Esp32FileList page;
-      try {
-        page = await _listWithRetry();
-      } catch (e) {
-        errors++;
-        listFailed = true;
-        if (e is Esp32HttpException && e.isSdFailure) sdFailed = true;
-        yield SyncProgress(
-          SyncStep.listar,
-          StepStatus.error,
-          sdFailed
-              ? ErrorMessages.esp32(e)
-              : 'No se pudo leer la lista de archivos. ${ErrorMessages.esp32(e)}',
-          technical: '$e',
-        );
-        break;
-      }
-      sdHasMore = page.truncated;
-
-      // Las fotos que ya fallaron en esta corrida no se reintentan.
-      final photos = page.files
-          .where((f) => f.name.toLowerCase().endsWith('.jpg'))
-          .where((f) => !failed.contains(f.name))
-          .toList();
-      totalSeen += photos.length;
-
-      yield SyncProgress(
-        SyncStep.listar,
-        StepStatus.ok,
-        '$prefix${plural(photos.length, 'foto', 'fotos')} en este lote'
-        '${page.truncated ? ' (la SD tiene más archivos de los que caben en un lote)' : ''}.',
-      );
-
-      if (photos.isEmpty) {
-        if (continuous && page.truncated) stoppedNoProgress = true;
-        break;
+      String overallText(bool more) {
+        final done = plural(newPhotos + repeatedPhotos, 'foto descargada', 'fotos descargadas');
+        return more ? '$done, quedan más en la SD' : done;
       }
 
-      final keepGoing = continuous && page.truncated;
-      int okInBatch = 0;
-      int doneInBatch = 0;
-      for (final photo in photos) {
-        // Cancelación cooperativa: solo entre fotos, nunca a mitad de
-        // descargar → guardar → registrar → borrar.
+      while (true) {
         if (cancelRequested()) {
           cancelled = true;
           break;
         }
-        yield SyncProgress(
-          SyncStep.fotos,
-          StepStatus.enCurso,
-          '${continuous ? 'Lote $batch: ' : ''}foto ${doneInBatch + 1} de ${photos.length}',
-          current: doneInBatch,
-          total: photos.length,
-          overall: overallText(page.truncated),
-          overallOngoing: keepGoing,
-        );
-        SyncIssue? issue;
-        try {
-          final isNew = await _downloadOne(photo.name);
-          okInBatch++;
-          isNew ? newPhotos++ : repeatedPhotos++;
-        } catch (e) {
-          failed.add(photo.name);
-          errors++;
-          issue = SyncIssue('${photo.name}: ${ErrorMessages.esp32(e)}', technical: '$e');
-        }
-        doneInBatch++;
-        yield SyncProgress(
-          SyncStep.fotos,
-          StepStatus.enCurso,
-          '${continuous ? 'Lote $batch: ' : ''}foto $doneInBatch de ${photos.length}',
-          current: doneInBatch,
-          total: photos.length,
-          overall: overallText(page.truncated),
-          overallOngoing: keepGoing,
-          issue: issue,
-        );
-      }
-      if (cancelled) break;
-      if (!keepGoing) break;
-      if (okInBatch == 0) {
-        stoppedNoProgress = true;
-        break;
-      }
-    }
+        batch++;
+        final prefix = continuous ? 'Lote $batch: ' : '';
+        yield SyncProgress(SyncStep.listar, StepStatus.enCurso,
+            '${prefix}leyendo la lista de archivos…');
 
-    // Estado final del paso de fotos.
-    final repeatedNote = repeatedPhotos > 0
-        ? ' ${plural(repeatedPhotos, 'ya estaba', 'ya estaban')} en el teléfono.'
-        : '';
-    if (stoppedNoProgress) {
-      // Si hubo fotos fallidas ya se contaron como errores.
-      if (failed.isEmpty) errors++;
-      yield SyncProgress(
-        SyncStep.fotos,
-        StepStatus.error,
-        'Descarga continua detenida: en el lote $batch no se pudo sacar ninguna '
-        'foto de la SD, así que se detuvo para no repetir lo mismo en bucle.',
-        overall: overallText(true),
-        technical: failed.isEmpty
-            ? 'El lote $batch no traía fotos pero /list devolvió truncated:true '
-                '(otros archivos o carpetas ocupan la lista).'
-            : '${failed.length} fotos fallaron: ${failed.join(', ')}',
-      );
-    } else if (cancelled) {
-      yield SyncProgress(
-        SyncStep.fotos,
-        StepStatus.advertencia,
-        'Cancelada por ti.$repeatedNote Lo que quedó en la SD se descarga la próxima vez.',
-        overall: overallText(false),
-      );
-    } else if (listFailed && totalSeen == 0) {
-      yield const SyncProgress(SyncStep.fotos, StepStatus.omitido,
-          'No se descargaron fotos porque no se pudo leer la SD.');
-    } else if (totalSeen == 0) {
-      yield const SyncProgress(SyncStep.fotos, StepStatus.ok,
-          'No hay fotos nuevas en la SD.');
-    } else {
-      final remaining = !continuous && sdHasMore;
-      if (remaining) warnings++;
-      final hasIssues = failed.isNotEmpty || listFailed || remaining;
-      yield SyncProgress(
-        SyncStep.fotos,
-        hasIssues ? StepStatus.advertencia : StepStatus.ok,
-        [
-          if (failed.isNotEmpty)
-            '${plural(failed.length, 'foto no se pudo descargar', 'fotos no se pudieron descargar')} '
-                '(siguen en la SD).',
-          if (repeatedNote.isNotEmpty) repeatedNote.trim(),
-          if (remaining)
-            'Quedan más archivos en la SD: vuelve a descargar o activa «Descarga continua».',
-          if (!hasIssues && repeatedNote.isEmpty) 'Listo.',
-        ].join(' '),
-        overall: '${overallText(remaining)}.',
-      );
-    }
+        Esp32FileList page;
+        try {
+          page = await _listWithRetry();
+        } catch (e) {
+          errors++;
+          listFailed = true;
+          if (e is Esp32HttpException && e.isSdFailure) sdFailed = true;
+          yield SyncProgress(
+            SyncStep.listar,
+            StepStatus.error,
+            sdFailed
+                ? ErrorMessages.esp32(e)
+                : 'No se pudo leer la lista de archivos. ${ErrorMessages.esp32(e)}',
+            technical: '$e',
+          );
+          break;
+        }
+        sdHasMore = page.truncated;
+
+        // Las fotos que ya fallaron en esta corrida no se reintentan.
+        final photos = page.files
+            .where((f) => f.name.toLowerCase().endsWith('.jpg'))
+            .where((f) => !failed.contains(f.name))
+            .toList();
+        totalSeen += photos.length;
+
+        yield SyncProgress(
+          SyncStep.listar,
+          StepStatus.ok,
+          '$prefix${plural(photos.length, 'foto', 'fotos')} en este lote'
+          '${page.truncated ? ' (la SD tiene más archivos de los que caben en un lote)' : ''}.',
+        );
+
+        if (photos.isEmpty) {
+          if (continuous && page.truncated) stoppedNoProgress = true;
+          break;
+        }
+
+        final keepGoing = continuous && page.truncated;
+        int okInBatch = 0;
+        int doneInBatch = 0;
+        for (final photo in photos) {
+          // Cancelación cooperativa: solo entre fotos, nunca a mitad de
+          // descargar → guardar → registrar → borrar.
+          if (cancelRequested()) {
+            cancelled = true;
+            break;
+          }
+          yield SyncProgress(
+            SyncStep.fotos,
+            StepStatus.enCurso,
+            '${continuous ? 'Lote $batch: ' : ''}foto ${doneInBatch + 1} de ${photos.length}',
+            current: doneInBatch,
+            total: photos.length,
+            overall: overallText(page.truncated),
+            overallOngoing: keepGoing,
+          );
+          SyncIssue? issue;
+          try {
+            final isNew = await _downloadOne(photo.name);
+            okInBatch++;
+            isNew ? newPhotos++ : repeatedPhotos++;
+          } catch (e) {
+            failed.add(photo.name);
+            errors++;
+            issue = SyncIssue('${photo.name}: ${ErrorMessages.esp32(e)}', technical: '$e');
+          }
+          doneInBatch++;
+          yield SyncProgress(
+            SyncStep.fotos,
+            StepStatus.enCurso,
+            '${continuous ? 'Lote $batch: ' : ''}foto $doneInBatch de ${photos.length}',
+            current: doneInBatch,
+            total: photos.length,
+            overall: overallText(page.truncated),
+            overallOngoing: keepGoing,
+            issue: issue,
+          );
+        }
+        if (cancelled) break;
+        if (!keepGoing) break;
+        if (okInBatch == 0) {
+          stoppedNoProgress = true;
+          break;
+        }
+      }
+
+      // Estado final del paso de fotos.
+      final repeatedNote = repeatedPhotos > 0
+          ? ' ${plural(repeatedPhotos, 'ya estaba', 'ya estaban')} en el teléfono.'
+          : '';
+      if (stoppedNoProgress) {
+        // Si hubo fotos fallidas ya se contaron como errores.
+        if (failed.isEmpty) errors++;
+        yield SyncProgress(
+          SyncStep.fotos,
+          StepStatus.error,
+          'Descarga continua detenida: en el lote $batch no se pudo sacar ninguna '
+          'foto de la SD, así que se detuvo para no repetir lo mismo en bucle.',
+          overall: overallText(true),
+          technical: failed.isEmpty
+              ? 'El lote $batch no traía fotos pero /list devolvió truncated:true '
+                  '(otros archivos o carpetas ocupan la lista).'
+              : '${failed.length} fotos fallaron: ${failed.join(', ')}',
+        );
+      } else if (cancelled) {
+        yield SyncProgress(
+          SyncStep.fotos,
+          StepStatus.advertencia,
+          'Cancelada por ti.$repeatedNote Lo que quedó en la SD se descarga la próxima vez.',
+          overall: overallText(false),
+        );
+      } else if (listFailed && totalSeen == 0) {
+        yield const SyncProgress(SyncStep.fotos, StepStatus.omitido,
+            'No se descargaron fotos porque no se pudo leer la SD.');
+      } else if (totalSeen == 0) {
+        yield const SyncProgress(SyncStep.fotos, StepStatus.ok,
+            'No hay fotos nuevas en la SD.');
+      } else {
+        final remaining = !continuous && sdHasMore;
+        if (remaining) warnings++;
+        final hasIssues = failed.isNotEmpty || listFailed || remaining;
+        yield SyncProgress(
+          SyncStep.fotos,
+          hasIssues ? StepStatus.advertencia : StepStatus.ok,
+          [
+            if (failed.isNotEmpty)
+              '${plural(failed.length, 'foto no se pudo descargar', 'fotos no se pudieron descargar')} '
+                  '(siguen en la SD).',
+            if (repeatedNote.isNotEmpty) repeatedNote.trim(),
+            if (remaining)
+              'Quedan más archivos en la SD: vuelve a descargar o activa «Descarga continua».',
+            if (!hasIssues && repeatedNote.isEmpty) 'Listo.',
+          ].join(' '),
+          overall: '${overallText(remaining)}.',
+        );
+      }
+
+    } // fin fotos
 
     await prefs.setString(_keyAt, DateTime.now().toIso8601String());
-    await prefs.setInt(_keyPhotos, newPhotos);
-    await prefs.setInt(_keyLines, newLines);
+    if (doLog) {
+      await prefs.setInt(_keyLines, newLines);
+    } else {
+      await prefs.setInt(_keyPhotos, newPhotos);
+    }
 
     yield SyncProgress.done(SyncSummary(
-      kind: SyncKind.descarga,
+      kind: kind,
       newPhotos: newPhotos,
       repeatedPhotos: repeatedPhotos,
       newLines: newLines,

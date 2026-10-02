@@ -23,7 +23,11 @@ class SyncProgressView extends StatelessWidget {
     final running = state.running;
     final text = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
-    final what = state.kind == SyncKind.descarga ? 'Descargando de la SD' : 'Subiendo al servidor';
+    final what = switch (state.kind) {
+      SyncKind.descargaLog => 'Descargando el log',
+      SyncKind.descargaFotos => 'Descargando fotos',
+      SyncKind.subida => 'Subiendo al servidor',
+    };
 
     return Card(
       margin: EdgeInsets.zero,
