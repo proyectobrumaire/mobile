@@ -1,6 +1,7 @@
 import 'package:brumaire_mobile/main.dart';
 import 'package:brumaire_mobile/models/event_record.dart';
 import 'package:brumaire_mobile/models/sync_progress.dart';
+import 'package:brumaire_mobile/screens/settings_screen.dart';
 import 'package:brumaire_mobile/widgets/event_timeline.dart';
 import 'package:brumaire_mobile/widgets/photo_viewer.dart';
 import 'package:brumaire_mobile/widgets/sync_progress_view.dart';
@@ -158,5 +159,46 @@ void main() {
     await tester.pumpAndSettle();
     expect(tapped?.event, 'BIRD');
     expect(find.text('Código: BIRD'), findsNothing); // no abrió el detalle
+  });
+
+  testWidgets('AppBar principal: solo Galería, Eventos y Configuración', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(const BrumaireApp());
+    await tester.pump();
+    final appBarButtons =
+        find.descendant(of: find.byType(AppBar), matching: find.byType(IconButton));
+    expect(appBarButtons, findsNWidgets(3));
+    expect(find.byTooltip('Galería'), findsOneWidget);
+    expect(find.byTooltip('Eventos'), findsOneWidget);
+    expect(find.byTooltip('Configuración'), findsOneWidget);
+    for (final old in ['IP del ESP32', 'Presigner S3', 'Reiniciar ESP32', 'Configurar ESP32']) {
+      expect(find.byTooltip(old), findsNothing, reason: old);
+    }
+    await tester.tap(find.byTooltip('Configuración'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsOneWidget);
+  });
+
+  testWidgets('Configuración: secciones ESP32 y Servidor con las cuatro opciones', (tester) async {
+    SharedPreferences.setMockInitialValues({'esp32_host': '192.168.1.50'});
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+    expect(find.text('ESP32'), findsOneWidget);
+    expect(find.text('Servidor'), findsOneWidget);
+    final titles = ['Dirección del ESP32', 'Configurar WiFi del ESP32', 'Reiniciar ESP32', 'Presigner S3'];
+    for (final t in titles) {
+      expect(find.text(t), findsOneWidget, reason: t);
+    }
+    // Orden: dirección, WiFi, reinicio (junto al WiFi), presigner.
+    final ys = [for (final t in titles) tester.getTopLeft(find.text(t)).dy];
+    expect(ys, orderedEquals([...ys]..sort()));
+    expect(find.text('192.168.1.50'), findsOneWidget); // host actual
+    expect(find.text('Sin configurar'), findsOneWidget); // tests sin --dart-define
+    expect(tester.widget<ListTile>(find.widgetWithText(ListTile, 'Reiniciar ESP32')).enabled, isTrue);
+
+    // Abre el diálogo de dirección con el valor actual.
+    await tester.tap(find.text('Dirección del ESP32'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, '192.168.1.50'), findsOneWidget);
   });
 }

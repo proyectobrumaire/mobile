@@ -209,7 +209,7 @@ class _CloudEventsTabState extends State<_CloudEventsTab>
       if (!cfg.isComplete) {
         if (!mounted) return;
         setState(() {
-          _error = 'Configura el servidor (ícono «Presigner S3» en la pantalla principal).';
+          _error = 'Configura el servidor (Configuración ⚙ → «Presigner S3» en la pantalla principal).';
           _loading = false;
         });
         return;

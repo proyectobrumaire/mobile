@@ -123,7 +123,7 @@ class _LocalGalleryTabState extends State<LocalGalleryTab>
     if (!mounted) return;
     if (!cfg.isComplete) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Primero configura el servidor (ícono «Presigner S3» en la pantalla principal).'),
+        content: Text('Primero configura el servidor (Configuración ⚙ → «Presigner S3» en la pantalla principal).'),
       ));
       return;
     }

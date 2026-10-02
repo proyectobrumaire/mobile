@@ -35,7 +35,7 @@ class ErrorMessages {
     if (e is Esp32HttpException) {
       if (e.isSdFailure) {
         return 'La tarjeta SD no responde: las fotos y eventos no se están guardando. '
-            'Reinicia la placa con el botón de reinicio (↻ arriba). Si persiste, '
+            'Reinicia la placa (botón «Reiniciar» del aviso rojo o Configuración ⚙). Si persiste, '
             'revisa la tarjeta o la alimentación.';
       }
       if (e.isSdBusy) {
