@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/event_record.dart';
 import '../models/gallery_group.dart';
+import '../models/rango_fechas.dart';
 import '../services/presigner_config.dart';
 import '../services/cloud_gallery_service.dart';
 import '../services/error_messages.dart';
@@ -8,6 +9,7 @@ import '../services/local_storage_service.dart';
 import '../services/sync_run_controller.dart';
 import '../widgets/event_timeline.dart';
 import '../widgets/photo_viewer.dart';
+import '../widgets/range_selector.dart';
 import 'local_gallery_tab.dart';
 import '../widgets/truncated_notice.dart';
 
@@ -169,9 +171,7 @@ class _CloudEventsTab extends StatefulWidget {
 
 class _CloudEventsTabState extends State<_CloudEventsTab>
     with AutomaticKeepAliveClientMixin {
-  static const _ranges = ['Hoy', '7 días', '30 días'];
-
-  int _rangeIdx = 0;
+  RangoFechas _rango = const RangoFechas(RangoPreset.hoy);
   Set<String> _selected = cloudEventCategories.toSet();
   bool _loading = false;
   String? _error;
@@ -185,15 +185,6 @@ class _CloudEventsTabState extends State<_CloudEventsTab>
   void initState() {
     super.initState();
     _fetch();
-  }
-
-  ({DateTime from, DateTime to}) _range() {
-    final now = DateTime.now();
-    return switch (_rangeIdx) {
-      0 => (from: DateTime(now.year, now.month, now.day), to: now),
-      2 => (from: now.subtract(const Duration(days: 30)), to: now),
-      _ => (from: now.subtract(const Duration(days: 7)), to: now),
-    };
   }
 
   Future<void> _fetch() async {
@@ -214,7 +205,7 @@ class _CloudEventsTabState extends State<_CloudEventsTab>
         });
         return;
       }
-      final r = _range();
+      final r = _rango.resolver();
       final page = await CloudGalleryService(url, secret).fetchEvents(
         from: r.from,
         to: r.to,
@@ -247,18 +238,13 @@ class _CloudEventsTabState extends State<_CloudEventsTab>
           child: Row(
             children: [
               Expanded(
-                child: Wrap(
-                  spacing: 8,
-                  children: List.generate(_ranges.length, (i) => ChoiceChip(
-                        label: Text(_ranges[i]),
-                        selected: i == _rangeIdx,
-                        onSelected: _loading
-                            ? null
-                            : (_) {
-                                setState(() => _rangeIdx = i);
-                                _fetch();
-                              },
-                      )),
+                child: RangeSelector(
+                  value: _rango,
+                  enabled: !_loading,
+                  onChanged: (r) {
+                    setState(() => _rango = r);
+                    _fetch();
+                  },
                 ),
               ),
               IconButton(

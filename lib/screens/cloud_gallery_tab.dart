@@ -1,9 +1,13 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../models/fechas.dart';
+import '../models/rango_fechas.dart';
 import '../services/presigner_config.dart';
 import '../services/cloud_gallery_service.dart';
+import '../services/cloud_image_cache.dart';
 import '../services/error_messages.dart';
 import '../widgets/photo_viewer.dart';
+import '../widgets/range_selector.dart';
 import '../widgets/truncated_notice.dart';
 
 /// Pestaña Cloud: fotos ya subidas, desde una CloudGallerySource
@@ -23,9 +27,7 @@ class _Section {
 
 class _CloudGalleryTabState extends State<CloudGalleryTab>
     with AutomaticKeepAliveClientMixin {
-  static const _ranges = ['Hoy', '7 días', '30 días'];
-
-  int _rangeIdx = 1;
+  RangoFechas _rango = const RangoFechas(RangoPreset.semana);
   int _sourceIdx = 0;
   List<CloudGallerySource> _sources = const [];
   bool _loading = false;
@@ -41,18 +43,6 @@ class _CloudGalleryTabState extends State<CloudGalleryTab>
   void initState() {
     super.initState();
     _fetch();
-  }
-
-  DateTimeRange _dateRange() {
-    final now = DateTime.now();
-    return switch (_rangeIdx) {
-      0 => DateTimeRange(
-          start: DateTime(now.year, now.month, now.day),
-          end:   DateTime(now.year, now.month, now.day, 23, 59, 59),
-        ),
-      2 => DateTimeRange(start: now.subtract(const Duration(days: 30)), end: now),
-      _ => DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now),
-    };
   }
 
   Future<void> _fetch() async {
@@ -71,8 +61,8 @@ class _CloudGalleryTabState extends State<CloudGalleryTab>
       }
       _sources = cloudGallerySources(url, secret);
       if (_sourceIdx >= _sources.length) _sourceIdx = 0;
-      final range = _dateRange();
-      final page = await _sources[_sourceIdx].fetch(from: range.start, to: range.end);
+      final range = _rango.resolver();
+      final page = await _sources[_sourceIdx].fetch(from: range.from, to: range.to);
       if (!mounted) return;
       setState(() { _photos = page.items; _truncated = page.truncated; _loading = false; });
     } catch (e) {
@@ -134,7 +124,7 @@ class _CloudGalleryTabState extends State<CloudGalleryTab>
           photos: [
             for (final p in section.photos)
               ViewerPhoto(
-                image: p.displayUrl != null ? NetworkImage(p.displayUrl!) : null,
+                image: p.displayUrl != null ? CloudImageCache.provider(p.displayUrl!) : null,
                 title: '${formatDayHeader(p.timestamp.toLocal())} · '
                     '${formatTime(p.timestamp.toLocal())}',
                 subtitle: p.species != null ? _formatSpecies(p.species!) : 'Sin aves detectadas',
@@ -167,18 +157,13 @@ class _CloudGalleryTabState extends State<CloudGalleryTab>
           child: Row(
             children: [
               Expanded(
-                child: Wrap(
-                  spacing: 8,
-                  children: List.generate(_ranges.length, (i) => ChoiceChip(
-                        label: Text(_ranges[i]),
-                        selected: i == _rangeIdx,
-                        onSelected: _loading
-                            ? null
-                            : (_) {
-                                setState(() => _rangeIdx = i);
-                                _fetch();
-                              },
-                      )),
+                child: RangeSelector(
+                  value: _rango,
+                  enabled: !_loading,
+                  onChanged: (r) {
+                    setState(() => _rango = r);
+                    _fetch();
+                  },
                 ),
               ),
               IconButton(
@@ -269,7 +254,7 @@ class _CloudGalleryTabState extends State<CloudGalleryTab>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '$src: ${photos.length} ${photos.length == 1 ? 'foto' : 'fotos'} · ${_ranges[_rangeIdx]}',
+                    '$src: ${photos.length} ${photos.length == 1 ? 'foto' : 'fotos'} · ${_rango.etiqueta}',
                     style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
                   ),
                   if (_truncated) const TruncatedNotice(what: 'fotos'),
@@ -347,14 +332,16 @@ class _CloudThumb extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             if (photo.displayUrl != null)
-              Image.network(
-                photo.displayUrl!,
+              // Caché en disco por ruta de S3 (la URL firmada cambia en cada consulta).
+              CachedNetworkImage(
+                imageUrl: photo.displayUrl!,
+                cacheKey: cloudImageCacheKey(photo.displayUrl!),
+                cacheManager: CloudImageCache.manager,
                 fit: BoxFit.cover,
-                cacheWidth: 360,
-                loadingBuilder: (_, child, progress) => progress == null
-                    ? child
-                    : Container(color: Colors.grey.shade100),
-                errorBuilder: (_, _, _) => Container(
+                memCacheWidth: 360,
+                fadeInDuration: const Duration(milliseconds: 150),
+                placeholder: (_, _) => Container(color: Colors.grey.shade100),
+                errorWidget: (_, _, _) => Container(
                   color: Colors.grey.shade200,
                   child: const Icon(Icons.broken_image, color: Colors.grey),
                 ),

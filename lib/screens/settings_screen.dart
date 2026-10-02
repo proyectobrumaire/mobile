@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/cloud_image_cache.dart';
 import '../services/presigner_config.dart';
 import '../services/sync_run_controller.dart';
 import '../widgets/config_dialogs.dart';
@@ -67,6 +68,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _load();
   }
 
+  Future<void> _vaciarCacheFotos() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Borrar fotos guardadas'),
+        content: const Text(
+            'Se borran del teléfono las copias de las fotos de la galería Cloud. '
+            'Las fotos siguen en la nube; se descargan de nuevo al abrir la galería.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Borrar')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await CloudImageCache.vaciar();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Fotos guardadas de la nube borradas')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final busy = _sync.running;
@@ -103,6 +126,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('Presigner S3'),
             subtitle: Text(_presignerSubtitle()),
             onTap: _editPresigner,
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined),
+            title: const Text('Borrar fotos de la nube guardadas'),
+            subtitle: const Text('Copias en el teléfono de la galería Cloud; se vuelven a descargar al verlas'),
+            onTap: _vaciarCacheFotos,
           ),
         ],
       ),
